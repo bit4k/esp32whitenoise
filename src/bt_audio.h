@@ -25,6 +25,8 @@ public:
 class BTAudio {
 public:
     BTAudio();
+    
+    static String pendingDeviceName;
     void begin(const std::vector<String>& savedDevices);
     
     void connectTo(const String& mac);

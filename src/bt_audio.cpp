@@ -80,6 +80,8 @@ public:
 
 AudioOutputRingBuf *outBuf = nullptr;
 
+String BTAudio::pendingDeviceName = "";
+
 BTAudio::BTAudio() {
     timerState = TIMER_30_MIN;
     timerStartTime = 0;
@@ -89,12 +91,28 @@ BTAudio::BTAudio() {
 void BTAudio::begin(const std::vector<String>& savedDevices) {
     outBuf = new AudioOutputRingBuf();
     
-    // Copy to our member variable so the memory stays valid
-    _targetDevices = savedDevices;
+    String pending = storage.popPendingDevice();
+    if (pending != "") {
+        BTAudio::pendingDeviceName = pending;
+        _targetDevices = {pending};
+    } else {
+        BTAudio::pendingDeviceName = "";
+        _targetDevices = savedDevices;
+    }
     
     // Set callbacks
     a2dp_source.set_auto_reconnect(false);
     a2dp_source.set_reset_ble(false); // Prevents esp_bt_controller_mem_release(BLE) crash on ESP-IDF 5
+    
+    a2dp_source.set_on_connection_state_changed([](esp_a2d_connection_state_t state, void *) {
+        if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+            if (BTAudio::pendingDeviceName != "") {
+                storage.addSavedDevice(BTAudio::pendingDeviceName);
+                Serial.printf("[BTAudio] Successfully connected to %s. Saved!\n", BTAudio::pendingDeviceName.c_str());
+                BTAudio::pendingDeviceName = ""; // Clear so it only saves once
+            }
+        }
+    });
     
     
     if (_targetDevices.size() == 0) {
@@ -128,7 +146,7 @@ void BTAudio::connectTo(const String& mac) {
     if (isConnected()) {
         a2dp_source.disconnect();
     }
-    storage.addSavedDevice(mac);
+    storage.setPendingDevice(mac);
     // Reboot must be handled by the caller after sending HTTP response
 }
 

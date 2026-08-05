@@ -75,11 +75,14 @@ const char* html_page = R"HTML(
         
         function saveMac() {
             let m = document.getElementById('mac').value;
-            fetch('/api/connect?mac='+encodeURIComponent(m)).then(()=>alert('Saved! Rebooting to apply...'));
+            connectMac(m);
+        }
+        function connectMac(m) {
+            fetch('/api/connect?mac='+encodeURIComponent(m)).then(()=>{ alert('Connecting & Rebooting...'); setTimeout(()=>location.reload(), 3000); });
         }
         function deleteMac(name) {
             if(confirm("Delete " + name + "?")) {
-                fetch('/api/delete?mac='+encodeURIComponent(name)).then(()=>alert('Deleted! Rebooting...'));
+                fetch('/api/delete?mac='+encodeURIComponent(name)).then(()=>{ alert('Deleted! Rebooting...'); setTimeout(()=>location.reload(), 3000); });
             }
         }
         function ota() {

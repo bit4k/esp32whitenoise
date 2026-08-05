@@ -71,6 +71,18 @@ void Storage::removeSavedDevice(const String& name) {
     }
 }
 
+void Storage::setPendingDevice(const String& name) {
+    prefs.putString("pending_mac", name);
+}
+
+String Storage::popPendingDevice() {
+    String pending = prefs.getString("pending_mac", "");
+    if (pending != "") {
+        prefs.remove("pending_mac");
+    }
+    return pending;
+}
+
 void Storage::saveLastNoiseType(int typeIndex) {
     prefs.putInt("noise_type", typeIndex);
 }

@@ -13,6 +13,10 @@ public:
     void addSavedDevice(const String& name);
     void removeSavedDevice(const String& name);
     
+    // Pending device logic for connection verification
+    void setPendingDevice(const String& name);
+    String popPendingDevice();
+    
     // Save and load last selected noise type index
     void saveLastNoiseType(int typeIndex);
     int getLastNoiseType();
