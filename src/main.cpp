@@ -29,6 +29,9 @@ void setup() {
     
     // Init Storage
     storage.begin();
+    esp_log_level_set("BT_AV", ESP_LOG_WARN);
+    esp_log_level_set("BT_APP", ESP_LOG_WARN);
+
     
     std::vector<String> devs = storage.getSavedDevices();
     

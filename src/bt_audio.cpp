@@ -110,6 +110,10 @@ void BTAudio::begin(const std::vector<String>& savedDevices) {
     
     a2dp_source.set_on_connection_state_changed([](esp_a2d_connection_state_t state, void *) {
         if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+            // Force media stream to start immediately. Without this, ESP32-A2DP relies on a 10s heartbeat timer.
+            // Many speakers (like Sony SRS-XB10) will drop the connection if streaming doesn't start within 5s.
+            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
+            
             if (BTAudio::pendingDeviceName != "") {
                 storage.addSavedDevice(BTAudio::pendingDeviceName);
                 Serial.printf("[BTAudio] Successfully connected to %s. Saved!\n", BTAudio::pendingDeviceName.c_str());
@@ -280,6 +284,13 @@ int32_t BTAudio::audio_data_callback(uint8_t *data, int32_t len) {
                 memset(data + bytes_received, 0, len - bytes_received);
             }
             return len;
+        } else {
+            static uint32_t lastUf = 0;
+            if (millis() - lastUf > 2000) {
+                Serial.printf("[BTAudio] outBuf underflow!\n");
+                lastUf = millis();
+            }
+
         }
     }
     
