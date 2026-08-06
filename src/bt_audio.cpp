@@ -151,7 +151,14 @@ void BTAudio::connectTo(const String& mac) {
         a2dp_source.disconnect();
     }
     storage.setPendingDevice(mac);
-    // Reboot must be handled by the caller after sending HTTP response
+    BTAudio::pendingDeviceName = mac;
+    _targetDevices = {mac};
+    
+    // Update the A2DP source's target list dynamically
+    a2dp_source.updateTargetName(_targetDevices[0].c_str());
+    
+    // Disable auto-reconnect to force inquiry scan for the new name
+    a2dp_source.set_auto_reconnect(false);
 }
 
 void BTAudio::disconnect() {

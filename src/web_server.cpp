@@ -70,6 +70,18 @@ const char* html_page = R"HTML(
             } else {
                 html = "<p style='color:#aaa;'>No speakers saved.</p>";
             }
+            if (d.pending_mac && d.pending_mac !== "") {
+                html = `<div style="background:#b08d00; color:#fff; padding:10px; margin-bottom:10px; border-radius:5px;">
+                    <b>⏳ Connecting...</b><br>
+                    Attempting to connect to <b>${d.pending_mac}</b>.<br>
+                    Please wait up to 20 seconds. If it fails, restart the ESP32.
+                </div>` + html;
+                
+                // Disable connect buttons to prevent double-rebooting
+                setTimeout(() => {
+                    document.querySelectorAll('button').forEach(b => b.disabled = true);
+                }, 100);
+            }
             document.getElementById('savedDevicesList').innerHTML = html;
         });
         
@@ -78,11 +90,15 @@ const char* html_page = R"HTML(
             connectMac(m);
         }
         function connectMac(m) {
-            fetch('/api/connect?mac='+encodeURIComponent(m)).then(()=>{ alert('Connecting & Rebooting...'); setTimeout(()=>location.reload(), 3000); });
+            fetch('/api/connect?mac='+encodeURIComponent(m)).then(()=>{ 
+                location.reload(); 
+            });
         }
         function deleteMac(name) {
             if(confirm("Delete " + name + "?")) {
-                fetch('/api/delete?mac='+encodeURIComponent(name)).then(()=>{ alert('Deleted! Rebooting...'); setTimeout(()=>location.reload(), 3000); });
+                fetch('/api/delete?mac='+encodeURIComponent(name)).then(()=>{ 
+                    location.reload(); 
+                });
             }
         }
         function ota() {
@@ -217,6 +233,7 @@ void WebServerManager::begin() {
         }
         root["timer"] = btAudio.getTimerState();
         root["timerExpired"] = timerExpired;
+        root["pending_mac"] = BTAudio::pendingDeviceName;
         response->setLength();
         request->send(response);
     });
@@ -226,8 +243,6 @@ void WebServerManager::begin() {
             String mac = request->getParam("mac")->value();
             btAudio.connectTo(mac); 
             request->send(200, "text/plain", "OK");
-            delay(500);
-            ESP.restart();
         } else {
             request->send(400, "text/plain", "Missing MAC/Name");
         }
@@ -237,11 +252,7 @@ void WebServerManager::begin() {
         if(request->hasParam("mac")) {
             String mac = request->getParam("mac")->value();
             storage.removeSavedDevice(mac);
-            // Don't disconnect btAudio yet unless it is the currently playing one?
-            // Safer to just reboot so the new list applies.
             request->send(200, "text/plain", "OK");
-            delay(500);
-            ESP.restart();
         } else {
             request->send(400, "text/plain", "Missing MAC/Name");
         }

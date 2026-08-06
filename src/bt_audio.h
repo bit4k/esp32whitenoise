@@ -20,6 +20,11 @@ class MyA2DPSource : public BluetoothA2DPSource {
 public:
     std::vector<ScannedDevice> foundDevices;
     void filter_inquiry_scan_result(esp_bt_gap_cb_param_t* param) override;
+    
+    void updateTargetName(const char* name) {
+        bt_names.clear();
+        bt_names.push_back(name);
+    }
 };
 
 class BTAudio {
