@@ -24,7 +24,10 @@ std::vector<String> Storage::getSavedDevices() {
     }
     
     // Backwards compatibility migration
-    String old_mac = prefs.getString("last_mac", "");
+    String old_mac = "";
+    if (prefs.isKey("last_mac")) {
+        old_mac = prefs.getString("last_mac", "");
+    }
     if (old_mac.length() > 0) {
         prefs.remove("last_mac"); // Remove FIRST to prevent recursion
         if (std::find(devices.begin(), devices.end(), old_mac) == devices.end()) {
@@ -76,8 +79,11 @@ void Storage::setPendingDevice(const String& name) {
 }
 
 String Storage::popPendingDevice() {
-    String pending = prefs.getString("pending_mac", "");
-    if (pending != "") {
+    String pending = "";
+    if (prefs.isKey("pending_mac")) {
+        pending = prefs.getString("pending_mac", "");
+    }
+    if (pending.length() > 0) {
         prefs.remove("pending_mac");
     }
     return pending;
