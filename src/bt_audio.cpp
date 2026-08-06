@@ -95,13 +95,17 @@ void BTAudio::begin(const std::vector<String>& savedDevices) {
     if (pending != "") {
         BTAudio::pendingDeviceName = pending;
         _targetDevices = {pending};
+        // Disable auto-reconnect so it forces an inquiry scan for the new device
+        a2dp_source.set_auto_reconnect(false);
     } else {
         BTAudio::pendingDeviceName = "";
         _targetDevices = savedDevices;
+        // Enable auto-reconnect so it can directly connect to the last MAC 
+        // without needing the speaker to be in discovery/pairing mode!
+        a2dp_source.set_auto_reconnect(true);
     }
     
     // Set callbacks
-    a2dp_source.set_auto_reconnect(false);
     a2dp_source.set_reset_ble(false); // Prevents esp_bt_controller_mem_release(BLE) crash on ESP-IDF 5
     
     a2dp_source.set_on_connection_state_changed([](esp_a2d_connection_state_t state, void *) {
