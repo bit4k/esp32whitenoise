@@ -171,6 +171,14 @@ void BTAudio::disconnect() {
     }
 }
 
+void BTAudio::resetTimer() {
+    timerStartTime = millis();
+}
+
+void BTAudio::reconnect() {
+    a2dp_source.reconnect();
+}
+
 bool BTAudio::isConnected() {
     return a2dp_source.is_connected();
 }

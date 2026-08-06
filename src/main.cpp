@@ -19,6 +19,8 @@ void toggleLED() {
 // Timer and Disconnect logic
 bool timerExpired = false;
 uint32_t expireTime = 0;
+bool reconnectPending = false;
+uint32_t disconnectTime = 0;
 
 void setup() {
     Serial.begin(115200);
@@ -114,11 +116,23 @@ void loop() {
             if (millis() - expireTime > 5 * 60 * 1000) {
                 if (btAudio.isConnected()) {
                     btAudio.disconnect();
-                    Serial.println("Timer expired, 5 mins passed -> Disconnected BT.");
+                    Serial.println("Timer expired, 5 mins passed -> Disconnected BT to allow speaker to power off.");
+                    reconnectPending = true;
+                    disconnectTime = millis();
                 }
             }
         }
     } else {
         timerExpired = false;
+        reconnectPending = false;
+    }
+    
+    // If we disconnected due to sleep timer, wait 30 minutes before resuming background scans.
+    // This gives the speaker enough time to execute its own auto-power-off (usually 10-15 mins).
+    if (reconnectPending && (millis() - disconnectTime > 30 * 60 * 1000)) {
+        reconnectPending = false;
+        btAudio.resetTimer(); // Reset the timer so it plays music when it reconnects
+        btAudio.reconnect();  // Resume background scanning!
+        Serial.println("30 minutes passed since disconnect. Resuming background scanning for next session.");
     }
 }

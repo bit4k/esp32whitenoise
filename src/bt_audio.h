@@ -40,6 +40,9 @@ public:
     void loop();
     
     void playAnnouncement(const char* filepath);
+    void handleButton();
+    void resetTimer();
+    void reconnect();
     
     void nextNoiseTrack();
     void toggleTimer();
