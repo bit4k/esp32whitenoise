@@ -87,15 +87,25 @@ void loop() {
     
     // Timer Logic
     static bool wasConnected = false;
+    static bool wasPaused = false;
     bool isConn = btAudio.isConnected();
-    if (isConn != wasConnected) {
+    bool isPaused = btAudio.isPaused;
+    
+    if (isConn != wasConnected || (isConn && isPaused != wasPaused)) {
+        if (isConn != wasConnected) {
+            if (isConn) {
+                Serial.println("\n>>> BLUETOOTH-LAUTSPRECHER VERBUNDEN! <<<\n");
+            } else {
+                Serial.println("\n>>> BLUETOOTH-LAUTSPRECHER GETRENNT! <<<\n");
+            }
+        }
         wasConnected = isConn;
-        if (isConn) {
-            Serial.println("\n>>> BLUETOOTH-LAUTSPRECHER VERBUNDEN! <<<\n");
-            ledTicker.attach(0.2, toggleLED); // Fast blink when streaming
+        wasPaused = isPaused;
+        
+        if (isConn && !isPaused) {
+            ledTicker.attach(0.2, toggleLED); // Fast blink when playing
         } else {
-            Serial.println("\n>>> BLUETOOTH-LAUTSPRECHER GETRENNT! <<<\n");
-            ledTicker.attach(1.0, toggleLED); // Slow blink when disconnected
+            ledTicker.attach(1.0, toggleLED); // Slow blink when disconnected or paused
         }
     }
 

@@ -39,6 +39,8 @@ public:
     
     void loop();
     
+    bool isPaused = false;
+
     void playAnnouncement(const char* filepath);
     void handleButton();
     void resetTimer();

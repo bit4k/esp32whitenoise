@@ -258,12 +258,11 @@ void BTAudio::toggleTimer() {
 void BTAudio::avrc_cmd_callback(uint8_t cmd) {
     // 0 = Pause, 1 = Play
     if (cmd == 0) {
-        btAudio.lastPauseTime = millis();
+        btAudio.isPaused = true;
+        Serial.println("[BTAudio] AVRCP Pause received.");
     } else if (cmd == 1) {
-        if (millis() - btAudio.lastPauseTime < 1000) {
-            // Play pressed within 1 second of pause -> toggle timer
-            btAudio.toggleTimer();
-        }
+        btAudio.isPaused = false;
+        Serial.println("[BTAudio] AVRCP Play received.");
     }
 }
 
@@ -272,8 +271,8 @@ extern bool timerExpired;
 int32_t BTAudio::audio_data_callback(uint8_t *data, int32_t len) {
     if (!data || len <= 0) return 0;
     
-    // If Timer expired, send silence
-    if (timerExpired) {
+    // If paused or timer expired, send silence
+    if (btAudio.isPaused || timerExpired) {
         memset(data, 0, len);
         return len;
     }
