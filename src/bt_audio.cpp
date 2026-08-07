@@ -105,6 +105,13 @@ void BTAudio::begin(const std::vector<String>& savedDevices) {
         a2dp_source.set_auto_reconnect(true);
     }
     
+    // Register PLAY_STATUS_CHANGE to trick speakers into sending Play/Pause commands
+    std::vector<esp_avrc_rn_event_ids_t> events = {
+        ESP_AVRC_RN_VOLUME_CHANGE,
+        ESP_AVRC_RN_PLAY_STATUS_CHANGE
+    };
+    a2dp_source.set_avrc_rn_events(events);
+    
     // Set callbacks
     a2dp_source.set_reset_ble(false); // Prevents esp_bt_controller_mem_release(BLE) crash on ESP-IDF 5
     
