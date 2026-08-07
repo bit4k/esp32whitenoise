@@ -20,7 +20,7 @@ def patch_a2dp(source, target, env):
       } else if (rc->reg_ntf.event_id == ESP_AVRC_RN_PLAY_STATUS_CHANGE) {
         ESP_LOGW(BT_AV_TAG, "ESP_AVRC_RN_PLAY_STATUS_CHANGE requested!");
         esp_avrc_rn_param_t rn_param;
-        rn_param.play_status = ESP_AVRC_PLAYBACK_PLAYING;
+        rn_param.playback = ESP_AVRC_PLAYBACK_PLAYING;
         esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_PLAY_STATUS_CHANGE, ESP_AVRC_RN_RSP_INTERIM, &rn_param);
       }'''
 
