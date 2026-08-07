@@ -256,14 +256,17 @@ void BTAudio::toggleTimer() {
 }
 
 void BTAudio::avrc_cmd_callback(uint8_t cmd) {
-    // 0 = Pause, 1 = Play
-    if (cmd == 0) {
+    Serial.printf("[BTAudio] AVRCP Command received: 0x%02X\n", cmd);
+    
+    // ESP_AVRC_PT_CMD_PLAY = 0x44 (68)
+    // ESP_AVRC_PT_CMD_PAUSE = 0x46 (70)
+    if (cmd == 0x46) {
         btAudio.isPaused = true;
         btAudio.lastPauseTime = millis();
-        Serial.println("[BTAudio] AVRCP Pause received.");
-    } else if (cmd == 1) {
+        Serial.println("[BTAudio] -> Action: Pause");
+    } else if (cmd == 0x44) {
         btAudio.isPaused = false;
-        Serial.println("[BTAudio] AVRCP Play received.");
+        Serial.println("[BTAudio] -> Action: Play");
         if (millis() - btAudio.lastPauseTime < 1000) {
             // Play pressed within 1 second of pause -> toggle timer
             btAudio.toggleTimer();
