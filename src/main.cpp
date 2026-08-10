@@ -7,6 +7,7 @@
 #include "bt_audio.h"
 #include "web_server.h"
 #include <Ticker.h>
+#include <esp_gap_bt_api.h>
 
 WiFiManager wm;
 Ticker ledTicker;
@@ -137,12 +138,27 @@ void loop() {
         reconnectPending = false;
     }
     
-    // If we disconnected due to sleep timer, wait 30 minutes before resuming background scans.
+    // If we disconnected due to sleep timer, wait 30 minutes before allowing reconnections.
     // This gives the speaker enough time to execute its own auto-power-off (usually 10-15 mins).
     if (reconnectPending && (millis() - disconnectTime > 30 * 60 * 1000)) {
         reconnectPending = false;
         btAudio.resetTimer(); // Reset the timer so it plays music when it reconnects
-        btAudio.reconnect();  // Resume background scanning!
-        Serial.println("30 minutes passed since disconnect. Resuming background scanning for next session.");
+        Serial.println("30 minutes passed since disconnect. Allowing reconnections for the next session.");
+    }
+
+    // Background Reconnection Loop
+    // If we are disconnected and not in the cool-down period, we ensure the ESP32 is connectable
+    // and periodically try to page the speaker.
+    if (!btAudio.isConnected() && !reconnectPending) {
+        static uint32_t lastReconnectTry = 0;
+        if (millis() - lastReconnectTry > 15000) {
+            lastReconnectTry = millis();
+            
+            // 1. Force the ESP32 to be connectable and discoverable
+            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+            
+            // 2. Actively try to page the speaker
+            btAudio.reconnect();
+        }
     }
 }
