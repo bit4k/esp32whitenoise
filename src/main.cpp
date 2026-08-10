@@ -148,9 +148,9 @@ void loop() {
     }
 
     // Background Reconnection Loop
-    // If we are disconnected and not in the cool-down period, we ensure the ESP32 is connectable
+    // If we are fully disconnected and not in the cool-down period, we ensure the ESP32 is connectable
     // and periodically try to page the speaker.
-    if (!btAudio.isConnected() && !reconnectPending) {
+    if (btAudio.isDisconnected() && !reconnectPending) {
         static uint32_t lastReconnectTry = 0;
         if (millis() - lastReconnectTry > 15000) {
             lastReconnectTry = millis();

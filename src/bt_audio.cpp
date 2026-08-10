@@ -190,6 +190,10 @@ bool BTAudio::isConnected() {
     return a2dp_source.get_connection_state() == ESP_A2D_CONNECTION_STATE_CONNECTED;
 }
 
+bool BTAudio::isDisconnected() {
+    return a2dp_source.get_connection_state() == ESP_A2D_CONNECTION_STATE_DISCONNECTED;
+}
+
 void BTAudio::startScan() {
     // No need to clear or start manually since the library loops discovery in the background when disconnected
     // We just keep the devices in the list until they time out

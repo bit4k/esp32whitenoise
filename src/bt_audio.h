@@ -50,6 +50,7 @@ public:
     void toggleTimer();
     
     bool isConnected();
+    bool isDisconnected();
     bool isAnnouncementPlaying();
     
     // Scanning methods
