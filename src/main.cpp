@@ -142,6 +142,7 @@ void loop() {
     // This gives the speaker enough time to execute its own auto-power-off (usually 10-15 mins).
     if (reconnectPending && (millis() - disconnectTime > 30 * 60 * 1000)) {
         reconnectPending = false;
+        timerExpired = false; // MUST reset this so it doesn't immediately disconnect again!
         btAudio.resetTimer(); // Reset the timer so it plays music when it reconnects
         Serial.println("30 minutes passed since disconnect. Allowing reconnections for the next session.");
     }
