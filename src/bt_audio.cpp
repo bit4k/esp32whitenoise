@@ -187,7 +187,7 @@ void BTAudio::reconnect() {
 }
 
 bool BTAudio::isConnected() {
-    return a2dp_source.is_connected();
+    return a2dp_source.get_connection_state() == ESP_A2D_CONNECTION_STATE_CONNECTED;
 }
 
 void BTAudio::startScan() {
