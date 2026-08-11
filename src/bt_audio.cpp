@@ -115,9 +115,11 @@ void BTAudio::begin(const std::vector<String>& savedDevices) {
     // Set callbacks
     a2dp_source.set_reset_ble(false); // Prevents esp_bt_controller_mem_release(BLE) crash on ESP-IDF 5
     
-    a2dp_source.set_on_connection_state_changed([](esp_a2d_connection_state_t state, void *) {
+    a2dp_source.set_on_connection_state_changed([](esp_a2d_connection_state_t state, void *ptr) {
         if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
-            // Force media stream to start immediately. Without this, ESP32-A2DP relies on a 10s heartbeat timer.
+            // Reset pause state in case it was paused before disconnecting
+            btAudio.isPaused = false;
+            
             // Many speakers (like Sony SRS-XB10) will drop the connection if streaming doesn't start within 5s.
             esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
             
