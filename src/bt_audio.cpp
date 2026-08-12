@@ -102,14 +102,14 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
     case ESP_A2D_AUDIO_STATE_EVT: {
         s_a2d_audio_state = param->audio_stat.state;
         if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED) {
-            ESP_LOGI(BT_AV_TAG, "A2DP Audio Started");
+            Serial.println("[BTAudio] A2DP Audio Started");
         }
         break;
     }
     case ESP_A2D_MEDIA_CTRL_ACK_EVT: {
         if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY &&
             param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
-            ESP_LOGI(BT_AV_TAG, "Media ready, starting...");
+            Serial.println("[BTAudio] Media ready, starting...");
             esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
         }
         break;
@@ -137,7 +137,7 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
     }
     case ESP_AVRC_TG_PASSTHROUGH_CMD_EVT: {
         if (param->psth_cmd.key_state == 0) { // Pressed
-            ESP_LOGI(BT_AV_TAG, "AVRCP PT_CMD %d", param->psth_cmd.key_code);
+            Serial.printf("[BTAudio] AVRCP PT_CMD %d\n", param->psth_cmd.key_code);
             if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PLAY) {
                 btAudio.isPaused = false;
                 Serial.println("[BTAudio] -> Action: Play");
@@ -397,7 +397,7 @@ void BTAudio::loop() {
     
     if (mediaReadyPending && (millis() - connectedTime > 1500)) {
         mediaReadyPending = false;
-        ESP_LOGI(BT_AV_TAG, "Deferred Media ready check...");
+        Serial.println("[BTAudio] Deferred Media ready check...");
         esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
     }
 }

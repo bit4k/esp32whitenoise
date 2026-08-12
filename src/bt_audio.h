@@ -59,8 +59,8 @@ public:
 
     uint32_t lastPauseTime;
     
-    bool mediaReadyPending = false;
-    uint32_t connectedTime = 0;
+    volatile bool mediaReadyPending = false;
+    volatile uint32_t connectedTime = 0;
 
 private:
     TimerState timerState;
