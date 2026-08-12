@@ -159,6 +159,11 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
     }
 }
 
+static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param) {
+    // Dummy callback for AVRCP Controller events
+    // We only need to be registered so the speaker recognizes our AVRCP capability
+}
+
 static bool get_name_from_eir(uint8_t *eir, char *bdname, uint8_t *len) {
     uint8_t *rmt_bdname = NULL;
     uint8_t rmt_bdname_len = 0;
@@ -306,6 +311,12 @@ void BTAudio::initBluetooth() {
     // AVRCP Setup
     esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
     esp_avrc_tg_init();
+    
+    // Some speakers (like Sony) require the source to also support AVRCP Controller 
+    // to properly negotiate Play/Pause command passing!
+    esp_avrc_ct_init();
+    esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
+    
     esp_avrc_rn_evt_cap_mask_t evt_set = {0};
     esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
     esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_PLAY_STATUS_CHANGE);
