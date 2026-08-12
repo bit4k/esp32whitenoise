@@ -58,6 +58,9 @@ public:
     void setTimerState(TimerState state) { timerState = state; }
 
     uint32_t lastPauseTime;
+    
+    bool mediaReadyPending = false;
+    uint32_t connectedTime = 0;
 
 private:
     TimerState timerState;

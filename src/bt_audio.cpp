@@ -85,6 +85,8 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
             memcpy(s_peer_bda, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
             s_has_peer_bda = true;
             btAudio.isPaused = false; // Reset pause on connect
+            btAudio.mediaReadyPending = true;
+            btAudio.connectedTime = millis();
             
             if (BTAudio::pendingDeviceName != "") {
                 storage.addSavedDevice(BTAudio::pendingDeviceName);
@@ -102,12 +104,6 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
         if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED) {
             ESP_LOGI(BT_AV_TAG, "A2DP Audio Started");
         }
-        break;
-    }
-    case ESP_A2D_AUDIO_CFG_EVT: {
-        ESP_LOGI(BT_AV_TAG, "A2DP Audio Configured");
-        // Start media ONLY AFTER codec is configured
-        esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
         break;
     }
     case ESP_A2D_MEDIA_CTRL_ACK_EVT: {
@@ -308,8 +304,8 @@ void BTAudio::initBluetooth() {
     esp_bt_gap_register_callback(bt_app_gap_cb);
 
     // AVRCP Setup
-    esp_avrc_tg_init();
     esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
+    esp_avrc_tg_init();
     esp_avrc_rn_evt_cap_mask_t evt_set = {0};
     esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
     esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_PLAY_STATUS_CHANGE);
@@ -318,9 +314,9 @@ void BTAudio::initBluetooth() {
     }
 
     // A2DP Setup
-    esp_a2d_source_init();
     esp_a2d_register_callback(bt_app_av_sm_hdlr);
     esp_a2d_source_register_data_callback(audio_data_callback);
+    esp_a2d_source_init();
     
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 }
@@ -397,6 +393,12 @@ void BTAudio::loop() {
             delete mp3; mp3 = nullptr;
             delete fileSource; fileSource = nullptr;
         }
+    }
+    
+    if (mediaReadyPending && (millis() - connectedTime > 1500)) {
+        mediaReadyPending = false;
+        ESP_LOGI(BT_AV_TAG, "Deferred Media ready check...");
+        esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
     }
 }
 
