@@ -3,7 +3,12 @@
 #include <Arduino.h>
 #include <freertos/ringbuf.h>
 #include <vector>
-#include <BluetoothA2DPSource.h>
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_gap_bt_api.h"
+#include "esp_a2dp_api.h"
+#include "esp_avrc_api.h"
 
 enum TimerState {
     TIMER_30_MIN = 0,
@@ -13,18 +18,9 @@ enum TimerState {
 
 struct ScannedDevice {
     String name;
+    String bda_str;
+    esp_bd_addr_t bda;
     uint32_t lastSeen;
-};
-
-class MyA2DPSource : public BluetoothA2DPSource {
-public:
-    std::vector<ScannedDevice> foundDevices;
-    void filter_inquiry_scan_result(esp_bt_gap_cb_param_t* param) override;
-    
-    void updateTargetName(const char* name) {
-        bt_names.clear();
-        bt_names.push_back(name);
-    }
 };
 
 class BTAudio {
@@ -34,7 +30,7 @@ public:
     static String pendingDeviceName;
     void begin(const std::vector<String>& savedDevices);
     
-    void connectTo(const String& mac);
+    void connectTo(const String& name);
     void disconnect();
     
     void loop();
@@ -61,15 +57,13 @@ public:
     uint32_t getTimerStartTime() { return timerStartTime; }
     void setTimerState(TimerState state) { timerState = state; }
 
+    uint32_t lastPauseTime;
+
 private:
     TimerState timerState;
     uint32_t timerStartTime;
-    uint32_t lastPauseTime;
-    std::vector<String> _targetDevices;
     
-    static int32_t audio_data_callback(uint8_t *data, int32_t len);
-    static void avrc_cmd_callback(uint8_t cmd);
-    static void connection_state_callback(uint8_t state);
+    void initBluetooth();
 };
 
 extern BTAudio btAudio;

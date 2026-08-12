@@ -1,69 +1,31 @@
 #include "bt_audio.h"
 #include "noise_gen.h"
 #include "storage.h"
-#include <BluetoothA2DPSource.h>
 #include <SPIFFS.h>
 #include <AudioFileSourceSPIFFS.h>
 #include <AudioGeneratorMP3.h>
 #include <AudioOutput.h>
+#include "esp_log.h"
+
+#define BT_AV_TAG "BTAudio"
 
 BTAudio btAudio;
-MyA2DPSource a2dp_source;
 
-// Implementation of our custom BT scanner
-void MyA2DPSource::filter_inquiry_scan_result(esp_bt_gap_cb_param_t* param) {
-    esp_bt_gap_dev_prop_t *p;
-    uint8_t *eir = nullptr;
-    uint8_t *bdname_ptr = nullptr;
-    
-    for (int i = 0; i < param->disc_res.num_prop; i++) {
-        p = param->disc_res.prop + i;
-        if (p->type == ESP_BT_GAP_DEV_PROP_EIR) {
-            eir = (uint8_t *)(p->val);
-        } else if (p->type == ESP_BT_GAP_DEV_PROP_BDNAME) {
-            bdname_ptr = (uint8_t *)(p->val);
-        }
-    }
-    
-    char name_str[ESP_BT_GAP_MAX_BDNAME_LEN + 1] = {0};
-    if (bdname_ptr) {
-        strncpy(name_str, (char*)bdname_ptr, ESP_BT_GAP_MAX_BDNAME_LEN);
-    } else if (eir) {
-        uint8_t len = 0;
-        if (get_name_from_eir(eir, (uint8_t*)name_str, &len)) {
-            name_str[len] = '\0';
-        }
-    }
-    
-    if (strlen(name_str) > 0) {
-        String name = String(name_str);
-        bool updated = false;
-        for (auto& dev : foundDevices) {
-            if (dev.name == name) {
-                dev.lastSeen = millis();
-                updated = true;
-                break;
-            }
-        }
-        if (!updated) {
-            foundDevices.push_back({name, millis()});
-            Serial.printf("Found BT Device: %s\n", name.c_str());
-        }
-    }
-    // Call the original logic to allow connections to continue if matching
-    BluetoothA2DPSource::filter_inquiry_scan_result(param);
-}
+// -------------------------------------------------------------
+// Global variables for ESP-IDF Bluetooth State
+// -------------------------------------------------------------
+static esp_a2d_connection_state_t s_a2d_conn_state = ESP_A2D_CONNECTION_STATE_DISCONNECTED;
+static esp_a2d_audio_state_t s_a2d_audio_state = ESP_A2D_AUDIO_STATE_STOPPED;
+static esp_bd_addr_t s_peer_bda;
+static bool s_has_peer_bda = false;
 
-// ESP8266Audio objects
-AudioFileSourceSPIFFS *fileSource = nullptr;
-AudioGeneratorMP3 *mp3 = nullptr;
-
-// Custom AudioOutput that writes to a FreeRTOS RingBuffer
+// Audio processing
+extern bool timerExpired;
 class AudioOutputRingBuf : public AudioOutput {
 public:
     RingbufHandle_t rb;
     AudioOutputRingBuf() {
-        rb = xRingbufferCreate(4096, RINGBUF_TYPE_BYTEBUF); // 4KB buffer to free up heap for BT stack during connection
+        rb = xRingbufferCreate(4096, RINGBUF_TYPE_BYTEBUF);
     }
     ~AudioOutputRingBuf() {
         if (rb) vRingbufferDelete(rb);
@@ -71,19 +33,242 @@ public:
     virtual bool begin() override { return true; }
     virtual bool ConsumeSample(int16_t sample[2]) override {
         if (!rb) return false;
-        // Wait up to 10ms for space
         xRingbufferSend(rb, sample, 4, pdMS_TO_TICKS(10));
         return true;
     }
     virtual bool stop() override { return true; }
 };
 
-AudioOutputRingBuf *outBuf = nullptr;
+static AudioFileSourceSPIFFS *fileSource = nullptr;
+static AudioGeneratorMP3 *mp3 = nullptr;
+static AudioOutputRingBuf *outBuf = nullptr;
+static std::vector<ScannedDevice> s_foundDevices;
+static std::vector<String> s_targetDevices;
 
 String BTAudio::pendingDeviceName = "";
 
+// -------------------------------------------------------------
+// ESP-IDF Callbacks
+// -------------------------------------------------------------
+static int32_t audio_data_callback(uint8_t *data, int32_t len) {
+    if (!data || len <= 0) return 0;
+    
+    if (btAudio.isPaused || timerExpired) {
+        memset(data, 0, len);
+        return len;
+    }
+    
+    if (outBuf && outBuf->rb) {
+        size_t bytes_received;
+        uint8_t *rb_data = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &bytes_received, 0, len);
+        if (rb_data && bytes_received > 0) {
+            memcpy(data, rb_data, bytes_received);
+            vRingbufferReturnItem(outBuf->rb, rb_data);
+            if (bytes_received < len) {
+                int32_t remaining = len - bytes_received;
+                noiseGen.getFrames((NoiseGenerator::Frame*)(data + bytes_received), remaining / 4);
+            }
+            return len;
+        }
+    }
+    
+    noiseGen.getFrames((NoiseGenerator::Frame*)data, len / 4);
+    return len;
+}
+
+static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
+    switch (event) {
+    case ESP_A2D_CONNECTION_STATE_EVT: {
+        s_a2d_conn_state = param->conn_stat.state;
+        if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+            ESP_LOGI(BT_AV_TAG, "A2DP Connected");
+            memcpy(s_peer_bda, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
+            s_has_peer_bda = true;
+            btAudio.isPaused = false; // Reset pause on connect
+            
+            if (BTAudio::pendingDeviceName != "") {
+                storage.addSavedDevice(BTAudio::pendingDeviceName);
+                Serial.printf("[BTAudio] Successfully connected to %s. Saved!\n", BTAudio::pendingDeviceName.c_str());
+                BTAudio::pendingDeviceName = "";
+            }
+        } else if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+            ESP_LOGI(BT_AV_TAG, "A2DP Disconnected");
+            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        }
+        break;
+    }
+    case ESP_A2D_AUDIO_STATE_EVT: {
+        s_a2d_audio_state = param->audio_stat.state;
+        if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED) {
+            ESP_LOGI(BT_AV_TAG, "A2DP Audio Started");
+        }
+        break;
+    }
+    case ESP_A2D_AUDIO_CFG_EVT: {
+        ESP_LOGI(BT_AV_TAG, "A2DP Audio Configured");
+        // Start media ONLY AFTER codec is configured
+        esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
+        break;
+    }
+    case ESP_A2D_MEDIA_CTRL_ACK_EVT: {
+        if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY &&
+            param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
+            ESP_LOGI(BT_AV_TAG, "Media ready, starting...");
+            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t *param) {
+    switch (event) {
+    case ESP_AVRC_TG_REGISTER_NOTIFICATION_EVT: {
+        if (param->reg_ntf.event_id == ESP_AVRC_RN_PLAY_STATUS_CHANGE) {
+            ESP_LOGI(BT_AV_TAG, "AVRCP RN_PLAY_STATUS_CHANGE registered");
+            esp_avrc_rn_param_t rn_param;
+            rn_param.playback = ESP_AVRC_PLAYBACK_PLAYING;
+            esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_PLAY_STATUS_CHANGE, ESP_AVRC_RN_RSP_INTERIM, &rn_param);
+        } else if (param->reg_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
+            ESP_LOGI(BT_AV_TAG, "AVRCP RN_VOLUME_CHANGE registered");
+            esp_avrc_rn_param_t rn_param;
+            rn_param.volume = 127;
+            esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_VOLUME_CHANGE, ESP_AVRC_RN_RSP_INTERIM, &rn_param);
+        }
+        break;
+    }
+    case ESP_AVRC_TG_PASSTHROUGH_CMD_EVT: {
+        if (param->psth_cmd.key_state == 0) { // Pressed
+            ESP_LOGI(BT_AV_TAG, "AVRCP PT_CMD %d", param->psth_cmd.key_code);
+            if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PLAY) {
+                btAudio.isPaused = false;
+                Serial.println("[BTAudio] -> Action: Play");
+                if (millis() - btAudio.lastPauseTime < 1000) {
+                    btAudio.toggleTimer();
+                }
+            } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PAUSE) {
+                btAudio.isPaused = true;
+                btAudio.lastPauseTime = millis();
+                Serial.println("[BTAudio] -> Action: Pause");
+            } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_FORWARD) {
+                btAudio.nextNoiseTrack();
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static bool get_name_from_eir(uint8_t *eir, char *bdname, uint8_t *len) {
+    uint8_t *rmt_bdname = NULL;
+    uint8_t rmt_bdname_len = 0;
+
+    if (!eir) {
+        return false;
+    }
+
+    rmt_bdname = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME, &rmt_bdname_len);
+    if (!rmt_bdname) {
+        rmt_bdname = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME, &rmt_bdname_len);
+    }
+
+    if (rmt_bdname) {
+        if (rmt_bdname_len > ESP_BT_GAP_MAX_BDNAME_LEN) {
+            rmt_bdname_len = ESP_BT_GAP_MAX_BDNAME_LEN;
+        }
+
+        if (bdname) {
+            memcpy(bdname, rmt_bdname, rmt_bdname_len);
+            bdname[rmt_bdname_len] = '\0';
+        }
+        if (len) {
+            *len = rmt_bdname_len;
+        }
+        return true;
+    }
+    return false;
+}
+
+static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
+    switch (event) {
+    case ESP_BT_GAP_DISC_RES_EVT: {
+        esp_bt_gap_dev_prop_t *p;
+        uint8_t *eir = nullptr;
+        uint8_t *bdname_ptr = nullptr;
+        for (int i = 0; i < param->disc_res.num_prop; i++) {
+            p = param->disc_res.prop + i;
+            if (p->type == ESP_BT_GAP_DEV_PROP_EIR) {
+                eir = (uint8_t *)(p->val);
+            } else if (p->type == ESP_BT_GAP_DEV_PROP_BDNAME) {
+                bdname_ptr = (uint8_t *)(p->val);
+            }
+        }
+        
+        char name_str[ESP_BT_GAP_MAX_BDNAME_LEN + 1] = {0};
+        if (bdname_ptr) {
+            strncpy(name_str, (char*)bdname_ptr, ESP_BT_GAP_MAX_BDNAME_LEN);
+        } else if (eir) {
+            uint8_t len = 0;
+            if (get_name_from_eir(eir, name_str, &len)) {
+                name_str[len] = '\0';
+            }
+        }
+        
+        if (strlen(name_str) > 0) {
+            String name = String(name_str);
+            bool updated = false;
+            for (auto& dev : s_foundDevices) {
+                if (dev.name == name) {
+                    dev.lastSeen = millis();
+                    updated = true;
+                    break;
+                }
+            }
+            if (!updated) {
+                ScannedDevice dev;
+                dev.name = name;
+                dev.lastSeen = millis();
+                memcpy(dev.bda, param->disc_res.bda, ESP_BD_ADDR_LEN);
+                s_foundDevices.push_back(dev);
+                Serial.printf("Found BT Device: %s\n", name.c_str());
+            }
+            
+            // Check if it's our target device
+            for (const String& target : s_targetDevices) {
+                if (target == name) {
+                    ESP_LOGI(BT_AV_TAG, "Found target device %s! Connecting...", name.c_str());
+                    esp_bt_gap_cancel_discovery();
+                    memcpy(s_peer_bda, param->disc_res.bda, ESP_BD_ADDR_LEN);
+                    s_has_peer_bda = true;
+                    esp_a2d_source_connect(s_peer_bda);
+                    break;
+                }
+            }
+        }
+        break;
+    }
+    case ESP_BT_GAP_DISC_STATE_CHANGED_EVT: {
+        if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
+            ESP_LOGI(BT_AV_TAG, "Discovery stopped.");
+        } else if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED) {
+            ESP_LOGI(BT_AV_TAG, "Discovery started.");
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// -------------------------------------------------------------
+// BTAudio Class
+// -------------------------------------------------------------
 BTAudio::BTAudio() {
-    timerState = TIMER_30_MIN;
+    timerState = TIMER_ENDLESS;
     timerStartTime = 0;
     lastPauseTime = 0;
 }
@@ -94,143 +279,115 @@ void BTAudio::begin(const std::vector<String>& savedDevices) {
     String pending = storage.popPendingDevice();
     if (pending != "") {
         BTAudio::pendingDeviceName = pending;
-        _targetDevices = {pending};
-        // Disable auto-reconnect so it forces an inquiry scan for the new device
-        a2dp_source.set_auto_reconnect(false);
+        s_targetDevices = {pending};
     } else {
-        BTAudio::pendingDeviceName = "";
-        _targetDevices = savedDevices;
-        // Enable auto-reconnect so it can directly connect to the last MAC 
-        // without needing the speaker to be in discovery/pairing mode!
-        a2dp_source.set_auto_reconnect(true);
+        s_targetDevices = savedDevices;
     }
-    
-    // Register PLAY_STATUS_CHANGE to trick speakers into sending Play/Pause commands
-    std::vector<esp_avrc_rn_event_ids_t> events = {
-        ESP_AVRC_RN_VOLUME_CHANGE,
-        ESP_AVRC_RN_PLAY_STATUS_CHANGE
-    };
-    a2dp_source.set_avrc_rn_events(events);
-    
-    // Set callbacks
-    a2dp_source.set_reset_ble(false); // Prevents esp_bt_controller_mem_release(BLE) crash on ESP-IDF 5
-    
-    a2dp_source.set_on_connection_state_changed([](esp_a2d_connection_state_t state, void *ptr) {
-        if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
-            // Reset pause state in case it was paused before disconnecting
-            btAudio.isPaused = false;
-            
-            // Many speakers (like Sony SRS-XB10) will drop the connection if streaming doesn't start within 5s.
-            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
-            
-            if (BTAudio::pendingDeviceName != "") {
-                storage.addSavedDevice(BTAudio::pendingDeviceName);
-                Serial.printf("[BTAudio] Successfully connected to %s. Saved!\n", BTAudio::pendingDeviceName.c_str());
-                BTAudio::pendingDeviceName = ""; // Clear so it only saves once
-            }
-        }
-    });
-    
-    
-    if (_targetDevices.size() == 0) {
-        a2dp_source.start_raw(BTAudio::audio_data_callback);
-    } else if (_targetDevices.size() == 1) {
-        a2dp_source.start_raw(_targetDevices[0].c_str(), BTAudio::audio_data_callback);
-    } else if (_targetDevices.size() > 1) {
-        std::vector<const char*> names;
-        for (const String& d : _targetDevices) {
-            names.push_back(d.c_str());
-        }
-        a2dp_source.start_raw(names, BTAudio::audio_data_callback);
-    }
-    
-    // NOTE: ESP32-A2DP source AVRCP support for receiving commands from sink 
-    // requires setting up the avrc callback.
-    a2dp_source.set_avrc_passthru_command_callback([](uint8_t cmd, bool key_state) {
-        if (!key_state) { // false/0 = pressed
-            if (cmd == ESP_AVRC_PT_CMD_PAUSE || cmd == ESP_AVRC_PT_CMD_STOP) {
-                BTAudio::avrc_cmd_callback(0); // Pause
-            } else if (cmd == ESP_AVRC_PT_CMD_PLAY) {
-                BTAudio::avrc_cmd_callback(1); // Play
-            }
-        }
-    });
 
-    timerStartTime = millis();
+    initBluetooth();
+
+    resetTimer();
 }
 
-void BTAudio::connectTo(const String& mac) {
-    if (isConnected()) {
-        a2dp_source.disconnect();
+void BTAudio::initBluetooth() {
+    if(!btStart()) {
+        ESP_LOGE(BT_AV_TAG, "btStart failed");
+        return;
     }
-    storage.setPendingDevice(mac);
-    BTAudio::pendingDeviceName = mac;
-    _targetDevices = {mac};
+
+    if (esp_bluedroid_init() != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "esp_bluedroid_init failed");
+        return;
+    }
+    if (esp_bluedroid_enable() != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "esp_bluedroid_enable failed");
+        return;
+    }
+
+    // GAP Setup
+    esp_bt_gap_register_callback(bt_app_gap_cb);
+
+    // AVRCP Setup
+    esp_avrc_tg_init();
+    esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
+    esp_avrc_rn_evt_cap_mask_t evt_set = {0};
+    esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
+    esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_PLAY_STATUS_CHANGE);
+    if (esp_avrc_tg_set_rn_evt_cap(&evt_set) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "esp_avrc_tg_set_rn_evt_cap failed");
+    }
+
+    // A2DP Setup
+    esp_a2d_source_init();
+    esp_a2d_register_callback(bt_app_av_sm_hdlr);
+    esp_a2d_source_register_data_callback(audio_data_callback);
     
-    // Update the A2DP source's target list dynamically
-    a2dp_source.updateTargetName(_targetDevices[0].c_str());
-    
-    // Disable auto-reconnect to force inquiry scan for the new name
-    a2dp_source.set_auto_reconnect(false);
+    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+}
+
+void BTAudio::startScan() {
+    esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+}
+
+std::vector<String> BTAudio::getScanResults() {
+    std::vector<String> res;
+    uint32_t now = millis();
+    for (auto it = s_foundDevices.begin(); it != s_foundDevices.end(); ) {
+        if (now - it->lastSeen > 30000) {
+            it = s_foundDevices.erase(it);
+        } else {
+            res.push_back(it->name);
+            ++it;
+        }
+    }
+    return res;
+}
+
+void BTAudio::connectTo(const String& name) {
+    storage.setPendingDevice(name);
+    delay(500);
+    ESP.restart();
 }
 
 void BTAudio::disconnect() {
     if (isConnected()) {
-        a2dp_source.disconnect();
+        esp_a2d_source_disconnect(s_peer_bda);
     }
-}
-
-void BTAudio::resetTimer() {
-    timerStartTime = millis();
 }
 
 void BTAudio::reconnect() {
-    a2dp_source.reconnect();
+    if (s_has_peer_bda) {
+        esp_a2d_source_connect(s_peer_bda);
+    } else {
+        startScan();
+    }
 }
 
 bool BTAudio::isConnected() {
-    return a2dp_source.get_connection_state() == ESP_A2D_CONNECTION_STATE_CONNECTED;
+    return s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED;
 }
 
 bool BTAudio::isDisconnected() {
-    return a2dp_source.get_connection_state() == ESP_A2D_CONNECTION_STATE_DISCONNECTED;
+    return s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED;
 }
 
-void BTAudio::startScan() {
-    // No need to clear or start manually since the library loops discovery in the background when disconnected
-    // We just keep the devices in the list until they time out
-}
-
-std::vector<String> BTAudio::getScanResults() {
-    std::vector<String> activeDevices;
-    uint32_t now = millis();
-    
-    for (auto it = a2dp_source.foundDevices.begin(); it != a2dp_source.foundDevices.end(); ) {
-        if (now - it->lastSeen > 60000) {
-            // Remove devices not seen in the last 60 seconds
-            it = a2dp_source.foundDevices.erase(it);
-        } else {
-            activeDevices.push_back(it->name);
-            ++it;
-        }
-    }
-    return activeDevices;
+bool BTAudio::isAnnouncementPlaying() {
+    return (mp3 && mp3->isRunning());
 }
 
 void BTAudio::playAnnouncement(const char* filepath) {
     if (mp3 && mp3->isRunning()) {
         mp3->stop();
     }
-    if (fileSource) delete fileSource;
     if (mp3) delete mp3;
-    
+    if (fileSource) delete fileSource;
+
     fileSource = new AudioFileSourceSPIFFS(filepath);
     mp3 = new AudioGeneratorMP3();
-    mp3->begin(fileSource, outBuf);
-}
-
-bool BTAudio::isAnnouncementPlaying() {
-    return (mp3 && mp3->isRunning());
+    
+    if (outBuf) {
+        mp3->begin(fileSource, outBuf);
+    }
 }
 
 void BTAudio::loop() {
@@ -249,74 +406,27 @@ void BTAudio::nextNoiseTrack() {
     noiseGen.setType(t);
     storage.saveLastNoiseType(t);
     
-    // Play announcement for new noise track
     String filename = String("/") + String(t) + ".mp3";
     playAnnouncement(filename.c_str());
 }
 
 void BTAudio::toggleTimer() {
+    TimerState nextState;
     if (timerState == TIMER_30_MIN) {
-        timerState = TIMER_60_MIN;
-        playAnnouncement("/timer_60.mp3");
+        nextState = TIMER_60_MIN;
+        playAnnouncement("/60min.mp3");
     } else if (timerState == TIMER_60_MIN) {
-        timerState = TIMER_ENDLESS;
-        playAnnouncement("/timer_endless.mp3");
+        nextState = TIMER_ENDLESS;
+        playAnnouncement("/endlos.mp3");
     } else {
-        timerState = TIMER_30_MIN;
-        playAnnouncement("/timer_30.mp3");
+        nextState = TIMER_30_MIN;
+        playAnnouncement("/30min.mp3");
     }
+    timerState = nextState;
+    // We don't have saveLastTimerState in storage, we just rely on default timer
+    resetTimer();
+}
+
+void BTAudio::resetTimer() {
     timerStartTime = millis();
-}
-
-void BTAudio::avrc_cmd_callback(uint8_t cmd) {
-    Serial.printf("[BTAudio] AVRCP Command received: 0x%02X\n", cmd);
-    
-    // ESP_AVRC_PT_CMD_PLAY = 0x44 (68)
-    // ESP_AVRC_PT_CMD_PAUSE = 0x46 (70)
-    if (cmd == 0x46) {
-        btAudio.isPaused = true;
-        btAudio.lastPauseTime = millis();
-        Serial.println("[BTAudio] -> Action: Pause");
-    } else if (cmd == 0x44) {
-        btAudio.isPaused = false;
-        Serial.println("[BTAudio] -> Action: Play");
-        if (millis() - btAudio.lastPauseTime < 1000) {
-            // Play pressed within 1 second of pause -> toggle timer
-            btAudio.toggleTimer();
-        }
-    }
-}
-
-extern bool timerExpired;
-
-int32_t BTAudio::audio_data_callback(uint8_t *data, int32_t len) {
-    if (!data || len <= 0) return 0;
-    
-    // If paused or timer expired, send silence
-    if (btAudio.isPaused || timerExpired) {
-        memset(data, 0, len);
-        return len;
-    }
-    
-    // If MP3 is playing and we have data in the ring buffer, use it
-    if (outBuf && outBuf->rb) {
-        size_t bytes_received;
-        uint8_t *rb_data = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &bytes_received, 0, len);
-        
-        if (rb_data && bytes_received > 0) {
-            memcpy(data, rb_data, bytes_received);
-            vRingbufferReturnItem(outBuf->rb, (void *)rb_data);
-            
-            // If we didn't get enough bytes to fill 'len', fill the rest with silence
-            if (bytes_received < len) {
-                memset(data + bytes_received, 0, len - bytes_received);
-            }
-            return len;
-        }
-    }
-    
-    // Otherwise, generate noise
-    int32_t frameCount = len / 4; // 1 frame = 4 bytes (2 channels * 16-bit)
-    noiseGen.getFrames((NoiseGenerator::Frame*)data, frameCount);
-    return len;
 }
