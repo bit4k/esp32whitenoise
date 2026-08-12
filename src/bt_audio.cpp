@@ -77,6 +77,7 @@ static int32_t audio_data_callback(uint8_t *data, int32_t len) {
 }
 
 static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
+    switch (event) {
     case ESP_A2D_CONNECTION_STATE_EVT: {
         s_a2d_conn_state = param->conn_stat.state;
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
