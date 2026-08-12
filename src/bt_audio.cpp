@@ -77,7 +77,6 @@ static int32_t audio_data_callback(uint8_t *data, int32_t len) {
 }
 
 static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
-    switch (event) {
     case ESP_A2D_CONNECTION_STATE_EVT: {
         s_a2d_conn_state = param->conn_stat.state;
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
@@ -121,6 +120,20 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
 
 static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t *param) {
     switch (event) {
+    case ESP_AVRC_TG_CONNECTION_STATE_EVT: {
+        uint8_t *bda = param->conn_stat.remote_bda;
+        Serial.printf("[BTAudio] AVRC TG conn_state evt: state %d, [%02x:%02x:%02x:%02x:%02x:%02x]\n",
+                 param->conn_stat.connected, bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
+        
+        if (param->conn_stat.connected) {
+            esp_avrc_rn_evt_cap_mask_t evt_set = {0};
+            esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_PLAY_STATUS_CHANGE);
+            if (esp_avrc_tg_set_rn_evt_cap(&evt_set) != ESP_OK) {
+                Serial.println("[BTAudio] esp_avrc_tg_set_rn_evt_cap failed in callback");
+            }
+        }
+        break;
+    }
     case ESP_AVRC_TG_REGISTER_NOTIFICATION_EVT: {
         if (param->reg_ntf.event_id == ESP_AVRC_RN_PLAY_STATUS_CHANGE) {
             ESP_LOGI(BT_AV_TAG, "AVRCP RN_PLAY_STATUS_CHANGE registered");
@@ -160,8 +173,9 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
 }
 
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param) {
-    // Dummy callback for AVRCP Controller events
-    // We only need to be registered so the speaker recognizes our AVRCP capability
+    if (event == ESP_AVRC_CT_CONNECTION_STATE_EVT) {
+        Serial.printf("[BTAudio] AVRC CT conn_state evt: state %d\n", param->conn_stat.connected);
+    }
 }
 
 static bool get_name_from_eir(uint8_t *eir, char *bdname, uint8_t *len) {
@@ -317,13 +331,6 @@ void BTAudio::initBluetooth() {
     esp_avrc_ct_init();
     esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
     
-    esp_avrc_rn_evt_cap_mask_t evt_set = {0};
-    esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
-    esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_PLAY_STATUS_CHANGE);
-    if (esp_avrc_tg_set_rn_evt_cap(&evt_set) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "esp_avrc_tg_set_rn_evt_cap failed");
-    }
-
     // A2DP Setup
     esp_a2d_register_callback(bt_app_av_sm_hdlr);
     esp_a2d_source_register_data_callback(audio_data_callback);
