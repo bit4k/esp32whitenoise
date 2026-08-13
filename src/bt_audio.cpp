@@ -327,6 +327,14 @@ void BTAudio::initBluetooth() {
     esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
     esp_avrc_tg_init();
     
+    // Set up Passthrough Command Filter for Play, Pause, Forward, Backward
+    esp_avrc_psth_bit_mask_t cmd_set = {0};
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cmd_set, ESP_AVRC_PT_CMD_PLAY);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cmd_set, ESP_AVRC_PT_CMD_PAUSE);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cmd_set, ESP_AVRC_PT_CMD_FORWARD);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cmd_set, ESP_AVRC_PT_CMD_BACKWARD);
+    esp_avrc_tg_set_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_SUPPORT_CMD, &cmd_set);
+
     // Some speakers (like Sony) require the source to also support AVRCP Controller 
     // to properly negotiate Play/Pause command passing!
     esp_avrc_ct_init();
