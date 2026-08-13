@@ -45,6 +45,9 @@ public:
     void nextNoiseTrack();
     void toggleTimer();
     
+    volatile bool toggleTimerPending = false;
+    volatile bool nextTrackPending = false;
+    
     bool isConnected();
     bool isDisconnected();
     bool isAnnouncementPlaying();

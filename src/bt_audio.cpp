@@ -151,7 +151,7 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
                 // Software double-click fallback
                 if (millis() - btAudio.lastPauseTime < 1000) {
                     Serial.println("[BTAudio] -> Software Double-Click Detected!");
-                    btAudio.toggleTimer();
+                    btAudio.toggleTimerPending = true;
                 }
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PAUSE) {
                 btAudio.isPaused = true;
@@ -160,10 +160,10 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
                 Serial.println("[BTAudio] -> Action: Pause");
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_FORWARD) {
                 Serial.println("[BTAudio] -> Action: Forward (Hardware Double-Click!)");
-                btAudio.toggleTimer();
+                btAudio.toggleTimerPending = true;
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_BACKWARD) {
                 Serial.println("[BTAudio] -> Action: Backward (Hardware Triple-Click!)");
-                btAudio.nextNoiseTrack();
+                btAudio.nextTrackPending = true;
             }
         }
         break;
@@ -424,6 +424,15 @@ void BTAudio::playAnnouncement(const char* filepath) {
 }
 
 void BTAudio::loop() {
+    if (toggleTimerPending) {
+        toggleTimerPending = false;
+        toggleTimer();
+    }
+    if (nextTrackPending) {
+        nextTrackPending = false;
+        nextNoiseTrack();
+    }
+
     if (mp3 && mp3->isRunning()) {
         if (!mp3->loop()) {
             mp3->stop();
