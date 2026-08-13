@@ -315,6 +315,12 @@ void BTAudio::initBluetooth() {
     // GAP Setup
     esp_bt_gap_register_callback(bt_app_gap_cb);
 
+    // Set default parameters for Secure Simple Pairing (SSP) to allow "Just Works" encryption.
+    // Strict devices like Sony speakers often require an encrypted link to send AVRCP commands.
+    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
+    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
+    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
+
     // AVRCP Setup
     esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
     esp_avrc_tg_init();
