@@ -460,6 +460,7 @@ void BTAudio::nextNoiseTrack() {
     noiseGen.setType(t);
     storage.saveLastNoiseType(t);
     
+    isPaused = false; // Automatically resume play when track changes
     Serial.printf("[BTAudio] Rauschen gewechselt auf Typ: %d\n", t);
     
     String filename = String("/") + String(t) + ".mp3";
@@ -467,6 +468,7 @@ void BTAudio::nextNoiseTrack() {
 }
 
 void BTAudio::toggleTimer() {
+    isPaused = false; // Automatically resume play when timer changes
     TimerState nextState;
     if (timerState == TIMER_30_MIN) {
         nextState = TIMER_60_MIN;
