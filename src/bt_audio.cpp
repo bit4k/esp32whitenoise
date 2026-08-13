@@ -146,12 +146,14 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
             Serial.printf("[BTAudio] AVRCP PT_CMD %d\n", param->psth_cmd.key_code);
             if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PLAY) {
                 btAudio.isPaused = false;
+                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
                 Serial.println("[BTAudio] -> Action: Play");
                 if (millis() - btAudio.lastPauseTime < 1000) {
                     btAudio.toggleTimer();
                 }
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PAUSE) {
                 btAudio.isPaused = true;
+                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_SUSPEND);
                 btAudio.lastPauseTime = millis();
                 Serial.println("[BTAudio] -> Action: Pause");
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_FORWARD) {
