@@ -341,7 +341,11 @@ void BTAudio::initBluetooth() {
 }
 
 void BTAudio::startScan() {
-    esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+    static uint32_t lastScanStart = 0;
+    if (millis() - lastScanStart > 30000) {
+        lastScanStart = millis();
+        esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+    }
 }
 
 std::vector<String> BTAudio::getScanResults() {
