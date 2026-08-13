@@ -148,7 +148,9 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
                 btAudio.isPaused = false;
                 esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
                 Serial.println("[BTAudio] -> Action: Play");
+                // Software double-click fallback
                 if (millis() - btAudio.lastPauseTime < 1000) {
+                    Serial.println("[BTAudio] -> Software Double-Click Detected!");
                     btAudio.toggleTimer();
                 }
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PAUSE) {
@@ -157,6 +159,10 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
                 btAudio.lastPauseTime = millis();
                 Serial.println("[BTAudio] -> Action: Pause");
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_FORWARD) {
+                Serial.println("[BTAudio] -> Action: Forward (Hardware Double-Click!)");
+                btAudio.toggleTimer();
+            } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_BACKWARD) {
+                Serial.println("[BTAudio] -> Action: Backward (Hardware Triple-Click!)");
                 btAudio.nextNoiseTrack();
             }
         }
