@@ -125,14 +125,6 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         uint8_t *bda = param->conn_stat.remote_bda;
         Serial.printf("[BTAudio] AVRC TG conn_state evt: state %d, [%02x:%02x:%02x:%02x:%02x:%02x]\n",
                  param->conn_stat.connected, bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
-        
-        if (param->conn_stat.connected) {
-            esp_avrc_rn_evt_cap_mask_t evt_set = {0};
-            esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_PLAY_STATUS_CHANGE);
-            if (esp_avrc_tg_set_rn_evt_cap(&evt_set) != ESP_OK) {
-                Serial.println("[BTAudio] esp_avrc_tg_set_rn_evt_cap failed in callback");
-            }
-        }
         break;
     }
     case ESP_AVRC_TG_REGISTER_NOTIFICATION_EVT: {
@@ -333,7 +325,7 @@ void BTAudio::initBluetooth() {
     esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cmd_set, ESP_AVRC_PT_CMD_PAUSE);
     esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cmd_set, ESP_AVRC_PT_CMD_FORWARD);
     esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &cmd_set, ESP_AVRC_PT_CMD_BACKWARD);
-    esp_avrc_tg_set_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_SUPPORT_CMD, &cmd_set);
+    esp_avrc_tg_set_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_SUPPORTED_CMD, &cmd_set);
 
     // Some speakers (like Sony) require the source to also support AVRCP Controller 
     // to properly negotiate Play/Pause command passing!
