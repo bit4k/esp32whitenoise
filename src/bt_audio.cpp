@@ -456,15 +456,15 @@ void BTAudio::toggleTimer() {
     if (timerState == TIMER_30_MIN) {
         nextState = TIMER_60_MIN;
         Serial.println("[BTAudio] Timer umgeschaltet auf: 60 Minuten");
-        playAnnouncement("/60min.mp3");
+        playAnnouncement("/timer_60.mp3");
     } else if (timerState == TIMER_60_MIN) {
         nextState = TIMER_ENDLESS;
         Serial.println("[BTAudio] Timer umgeschaltet auf: Endlos");
-        playAnnouncement("/endlos.mp3");
+        playAnnouncement("/timer_endless.mp3");
     } else {
         nextState = TIMER_30_MIN;
         Serial.println("[BTAudio] Timer umgeschaltet auf: 30 Minuten");
-        playAnnouncement("/30min.mp3");
+        playAnnouncement("/timer_30.mp3");
     }
     timerState = nextState;
     // We don't have saveLastTimerState in storage, we just rely on default timer
