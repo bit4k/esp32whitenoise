@@ -146,7 +146,7 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
             Serial.printf("[BTAudio] AVRCP PT_CMD %d\n", param->psth_cmd.key_code);
             if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PLAY) {
                 btAudio.isPaused = false;
-                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
+                // Removed esp_a2d_media_ctrl(START) to prevent rapid-click state corruption crash
                 Serial.println("[BTAudio] -> Action: Play");
                 // Software double-click fallback
                 if (millis() - btAudio.lastPauseTime < 1000) {
@@ -155,7 +155,7 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
                 }
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PAUSE) {
                 btAudio.isPaused = true;
-                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_SUSPEND);
+                // Removed esp_a2d_media_ctrl(SUSPEND) to prevent rapid-click state corruption crash
                 btAudio.lastPauseTime = millis();
                 Serial.println("[BTAudio] -> Action: Pause");
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_FORWARD) {
@@ -445,6 +445,8 @@ void BTAudio::nextNoiseTrack() {
     noiseGen.setType(t);
     storage.saveLastNoiseType(t);
     
+    Serial.printf("[BTAudio] Rauschen gewechselt auf Typ: %d\n", t);
+    
     String filename = String("/") + String(t) + ".mp3";
     playAnnouncement(filename.c_str());
 }
@@ -453,12 +455,15 @@ void BTAudio::toggleTimer() {
     TimerState nextState;
     if (timerState == TIMER_30_MIN) {
         nextState = TIMER_60_MIN;
+        Serial.println("[BTAudio] Timer umgeschaltet auf: 60 Minuten");
         playAnnouncement("/60min.mp3");
     } else if (timerState == TIMER_60_MIN) {
         nextState = TIMER_ENDLESS;
+        Serial.println("[BTAudio] Timer umgeschaltet auf: Endlos");
         playAnnouncement("/endlos.mp3");
     } else {
         nextState = TIMER_30_MIN;
+        Serial.println("[BTAudio] Timer umgeschaltet auf: 30 Minuten");
         playAnnouncement("/30min.mp3");
     }
     timerState = nextState;
