@@ -25,7 +25,7 @@ class AudioOutputRingBuf : public AudioOutput {
 public:
     RingbufHandle_t rb;
     AudioOutputRingBuf() {
-        rb = xRingbufferCreate(4096, RINGBUF_TYPE_BYTEBUF);
+        rb = xRingbufferCreate(8192, RINGBUF_TYPE_BYTEBUF);
     }
     ~AudioOutputRingBuf() {
         if (rb) vRingbufferDelete(rb);
@@ -409,6 +409,11 @@ bool BTAudio::isAnnouncementPlaying() {
 }
 
 void BTAudio::playAnnouncement(const char* filepath) {
+    if (!SPIFFS.exists(filepath)) {
+        Serial.printf("[BTAudio] Error: Announcement file %s not found in SPIFFS!\n", filepath);
+        return;
+    }
+    
     if (mp3 && mp3->isRunning()) {
         mp3->stop();
     }
@@ -419,6 +424,7 @@ void BTAudio::playAnnouncement(const char* filepath) {
     mp3 = new AudioGeneratorMP3();
     
     if (outBuf) {
+        Serial.printf("[BTAudio] Playing announcement: %s\n", filepath);
         mp3->begin(fileSource, outBuf);
     }
 }
