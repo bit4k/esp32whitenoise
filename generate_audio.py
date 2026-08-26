@@ -28,4 +28,15 @@ for filename, text in timers.items():
     tts = gTTS(text=text, lang='en')
     tts.save(f"data/{filename}")
 
-print("Done! You can now upload the filesystem using PlatformIO: 'Upload Filesystem Image'")
+import subprocess
+
+for filename in os.listdir("data"):
+    if filename.endswith(".mp3"):
+        in_path = os.path.join("data", filename)
+        tmp_path = os.path.join("data", "tmp_" + filename)
+        cmd = ["ffmpeg", "-y", "-i", in_path, "-ar", "44100", "-ac", "2", "-ab", "128k", tmp_path]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 0:
+            os.replace(tmp_path, in_path)
+
+print("Done! All MP3 files resampled to 44100Hz stereo. Upload using PlatformIO: 'Upload Filesystem Image'")

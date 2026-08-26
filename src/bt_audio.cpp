@@ -58,21 +58,31 @@ static int32_t audio_data_callback(uint8_t *data, int32_t len) {
         return len;
     }
     
+    bool playingAnnouncement = btAudio.isAnnouncementPlaying();
+    
     if (outBuf && outBuf->rb) {
-        size_t bytes_received;
+        size_t bytes_received = 0;
         uint8_t *rb_data = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &bytes_received, 0, len);
         if (rb_data && bytes_received > 0) {
             memcpy(data, rb_data, bytes_received);
             vRingbufferReturnItem(outBuf->rb, rb_data);
             if (bytes_received < len) {
                 int32_t remaining = len - bytes_received;
-                noiseGen.getFrames((NoiseGenerator::Frame*)(data + bytes_received), remaining / 4);
+                if (playingAnnouncement) {
+                    memset(data + bytes_received, 0, remaining);
+                } else {
+                    noiseGen.getFrames((NoiseGenerator::Frame*)(data + bytes_received), remaining / 4);
+                }
             }
             return len;
         }
     }
     
-    noiseGen.getFrames((NoiseGenerator::Frame*)data, len / 4);
+    if (playingAnnouncement) {
+        memset(data, 0, len);
+    } else {
+        noiseGen.getFrames((NoiseGenerator::Frame*)data, len / 4);
+    }
     return len;
 }
 
@@ -440,10 +450,13 @@ void BTAudio::loop() {
     }
 
     if (mp3 && mp3->isRunning()) {
-        if (!mp3->loop()) {
-            mp3->stop();
-            delete mp3; mp3 = nullptr;
-            delete fileSource; fileSource = nullptr;
+        while (mp3 && mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024) {
+            if (!mp3->loop()) {
+                mp3->stop();
+                delete mp3; mp3 = nullptr;
+                delete fileSource; fileSource = nullptr;
+                break;
+            }
         }
     }
     
