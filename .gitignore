@@ -1,7 +1,31 @@
-.pio
-.vscode
-.idea
+# PlatformIO & Build Directories
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+.idea/
+build/
+bin/
+
+# Binaries & Compiled Files
 *.bin
 *.elf
 *.map
-build/
+*.hex
+merged_firmware.bin
+
+# Python & Virtual Environments
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# OS / System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
