@@ -62,12 +62,17 @@ public:
 
     uint32_t lastPauseTime;
     
+    void triggerWarningBeep();
+    void setFadeFactor(float factor) { fadeFactor = factor; }
+    float getFadeFactor() { return fadeFactor; }
+    
     volatile bool mediaReadyPending = false;
     volatile uint32_t connectedTime = 0;
 
 private:
     TimerState timerState;
     uint32_t timerStartTime;
+    float fadeFactor = 1.0f;
     
     void initBluetooth();
 };

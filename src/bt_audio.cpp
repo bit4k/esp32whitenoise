@@ -47,6 +47,21 @@ static std::vector<String> s_targetDevices;
 
 String BTAudio::pendingDeviceName = "";
 
+// Beep Generator State
+static volatile uint32_t s_beepSamplesRemaining = 0;
+static float s_beepPhase = 0.0f;
+static const float S_BEEP_FREQ = 440.0f; // 440 Hz
+static const float S_BEEP_SAMPLE_RATE = 44100.0f;
+static const float S_BEEP_TWO_PI = 6.283185307179586f;
+static const uint32_t S_BEEP_TOTAL_FRAMES = 17640; // 400ms at 44.1kHz
+static const uint32_t S_BEEP_ATTACK_FRAMES = 2205;  // 50ms
+static const uint32_t S_BEEP_DECAY_FRAMES = 2205;   // 50ms
+
+void BTAudio::triggerWarningBeep() {
+    s_beepPhase = 0.0f;
+    s_beepSamplesRemaining = S_BEEP_TOTAL_FRAMES;
+}
+
 // -------------------------------------------------------------
 // ESP-IDF Callbacks
 // -------------------------------------------------------------
@@ -82,6 +97,53 @@ static int32_t audio_data_callback(uint8_t *data, int32_t len) {
         memset(data, 0, len);
     } else {
         noiseGen.getFrames((NoiseGenerator::Frame*)data, len / 4);
+    }
+    
+    // Apply Volume Fade & Overlay Warning Beep if playing normal audio/noise
+    if (!playingAnnouncement) {
+        float currentFade = btAudio.getFadeFactor();
+        int16_t *samples = (int16_t *)data;
+        int32_t num_frames = len / 4; // 4 bytes per stereo frame
+        
+        for (int32_t i = 0; i < num_frames; i++) {
+            int16_t left = samples[i * 2];
+            int16_t right = samples[i * 2 + 1];
+            
+            // 1. Apply volume fade factor
+            if (currentFade < 1.0f) {
+                left = (int16_t)(left * currentFade);
+                right = (int16_t)(right * currentFade);
+            }
+            
+            // 2. Overlay warning beep if active
+            if (s_beepSamplesRemaining > 0) {
+                uint32_t framesPlayed = S_BEEP_TOTAL_FRAMES - s_beepSamplesRemaining;
+                float env = 0.12f; // max volume = 12%
+                
+                if (framesPlayed < S_BEEP_ATTACK_FRAMES) {
+                    env *= ((float)framesPlayed / (float)S_BEEP_ATTACK_FRAMES);
+                } else if (s_beepSamplesRemaining < S_BEEP_DECAY_FRAMES) {
+                    env *= ((float)s_beepSamplesRemaining / (float)S_BEEP_DECAY_FRAMES);
+                }
+                
+                float toneSample = sinf(s_beepPhase) * env * 32767.0f;
+                s_beepPhase += (S_BEEP_TWO_PI * S_BEEP_FREQ / S_BEEP_SAMPLE_RATE);
+                if (s_beepPhase >= S_BEEP_TWO_PI) {
+                    s_beepPhase -= S_BEEP_TWO_PI;
+                }
+                
+                int32_t mixedL = (int32_t)left + (int32_t)toneSample;
+                int32_t mixedR = (int32_t)right + (int32_t)toneSample;
+                
+                left = (mixedL > 32767) ? 32767 : ((mixedL < -32768) ? -32768 : (int16_t)mixedL);
+                right = (mixedR > 32767) ? 32767 : ((mixedR < -32768) ? -32768 : (int16_t)mixedR);
+                
+                s_beepSamplesRemaining--;
+            }
+            
+            samples[i * 2] = left;
+            samples[i * 2 + 1] = right;
+        }
     }
     return len;
 }
@@ -503,4 +565,5 @@ void BTAudio::toggleTimer() {
 
 void BTAudio::resetTimer() {
     timerStartTime = millis();
+    setFadeFactor(1.0f);
 }

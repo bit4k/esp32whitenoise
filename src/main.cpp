@@ -112,14 +112,34 @@ void loop() {
 
     if (btAudio.getTimerState() != TIMER_ENDLESS) {
         uint32_t duration = (btAudio.getTimerState() == TIMER_30_MIN) ? (30 * 60 * 1000) : (60 * 60 * 1000);
+        uint32_t fadeDuration = 2 * 60 * 1000; // 2 minutes (120,000 ms)
+        uint32_t fadeStart = (duration > fadeDuration) ? (duration - fadeDuration) : 0;
         uint32_t elapsed = millis() - btAudio.getTimerStartTime();
         
-        if (!timerExpired && elapsed > duration) {
+        static bool warningBeepTriggered = false;
+        
+        if (elapsed >= fadeStart && elapsed < duration) {
+            float fadeFactor = (float)(duration - elapsed) / (float)fadeDuration;
+            if (fadeFactor < 0.0f) fadeFactor = 0.0f;
+            btAudio.setFadeFactor(fadeFactor);
+            
+            if (!warningBeepTriggered) {
+                warningBeepTriggered = true;
+                btAudio.triggerWarningBeep();
+                Serial.println("\n[Timer] 2 Minuten vor Ende: Piepton abgespielt & Sanftes Ausblenden gestartet.\n");
+            }
+        } else if (elapsed < fadeStart) {
+            btAudio.setFadeFactor(1.0f);
+            warningBeepTriggered = false;
+        } else {
+            btAudio.setFadeFactor(0.0f);
+            warningBeepTriggered = false;
+        }
+        
+        if (!timerExpired && elapsed >= duration) {
             timerExpired = true;
             expireTime = millis();
-            // To mute audio, we can just switch to an invalid noise type, 
-            // but we didn't implement that. We can add a mute flag, or disconnect immediately.
-            // For now, let's just wait 5 minutes then disconnect. The silence might need an explicit mute.
+            Serial.println("\n[Timer] Sleep Timer abgelaufen (Lautstärke auf 0). Trenne BT in 5 Minuten.\n");
         }
         
         if (timerExpired) {
@@ -136,6 +156,7 @@ void loop() {
     } else {
         timerExpired = false;
         reconnectPending = false;
+        btAudio.setFadeFactor(1.0f);
     }
     
     // If we disconnected due to sleep timer, wait 30 minutes before allowing reconnections.
