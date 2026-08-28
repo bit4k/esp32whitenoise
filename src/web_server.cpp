@@ -16,134 +16,106 @@ extern bool timerExpired;
 WebServerManager webServer;
 AsyncWebServer server(80);
 
-const char html_page[] PROGMEM = R"HTML(
-<!DOCTYPE html>
+const char* html_page = R"HTML(<!DOCTYPE html>
 <html>
 <head>
     <title>ESP32 White Noise</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #ffffff; margin: 0; padding: 20px; text-align: center; }
+        body { font-family: sans-serif; background: #121212; color: #ffffff; margin: 0; padding: 20px; text-align: center; }
         h1 { color: #bb86fc; }
-        .card { background-color: #1e1e1e; border-radius: 10px; padding: 20px; max-width: 400px; margin: 0 auto 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
-        input[type="text"] { width: 80%; padding: 10px; margin: 10px 0; border: none; border-radius: 5px; background-color: #2c2c2c; color: white; }
-        button { background-color: #bb86fc; color: #000; border: none; padding: 10px 20px; border-radius: 5px; font-weight: bold; cursor: pointer; transition: 0.3s; margin: 5px; }
-        button:hover { background-color: #3700b3; color: #fff; }
-        .danger { background-color: #cf6679; color: #000; }
-        .danger:hover { background-color: #b00020; color: #fff; }
+        .card { background: #1e1e1e; border-radius: 10px; padding: 20px; max-width: 400px; margin: 0 auto 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
+        input[type="text"] { width: 80%; padding: 10px; margin: 10px 0; border: none; border-radius: 5px; background: #2c2c2c; color: white; }
+        button { background: #bb86fc; color: #000; border: none; padding: 10px 20px; border-radius: 5px; font-weight: bold; cursor: pointer; margin: 5px; }
+        button:hover { background: #3700b3; color: #fff; }
+        .danger { background: #cf6679; color: #000; }
     </style>
 </head>
 <body>
     <h1>White Noise Generator</h1>
-    
     <div class="card">
         <h2>Bluetooth Pairing</h2>
-        
         <h3>Saved Speakers:</h3>
         <div id="savedDevicesList">Loading...</div>
-        <hr style="border: 1px solid #444; margin: 15px 0;">
-        
+        <hr style="border:1px solid #444; margin:15px 0;">
         <button onclick="scanBT()">Scan for Speakers</button>
         <div id="scanResults" style="margin:10px 0; max-height:150px; overflow-y:auto; text-align:left; background:#2c2c2c; border-radius:5px; padding:5px;"></div>
-        
         <br>
-        <input type="text" id="mac" placeholder="Manual Name or MAC">
+        <input type="text" id="mac" placeholder="Speaker Name or MAC">
         <br>
         <button onclick="saveMac()">Connect</button>
     </div>
-    
     <div class="card">
         <h2>System</h2>
         <button onclick="ota()">Update Firmware (OTA)</button>
     </div>
-
     <script>
-        fetch('/api/status').then(r=>r.json()).then(d=>{
-            let html = "";
-            if (d.devices && d.devices.length > 0) {
-                d.devices.forEach(name => {
-                    html += `<div style="display:flex; justify-content:space-between; background:#2c2c2c; padding:5px 10px; margin-bottom:5px; border-radius:5px; align-items:center;">
-                        <span>${name}</span>
-                        <span style="cursor:pointer; background:#cf6679; padding:2px 5px; border-radius:3px;" onclick="deleteMac('${name.replace(/'/g, "\\'")}')">🗑️</span>
-                    </div>`;
-                });
-            } else {
-                html = "<p style='color:#aaa;'>No speakers saved.</p>";
-            }
-            if (d.pending_mac && d.pending_mac !== "") {
-                html = `<div style="background:#b08d00; color:#fff; padding:10px; margin-bottom:10px; border-radius:5px;">
-                    <b>⏳ Connecting...</b><br>
-                    Attempting to connect to <b>${d.pending_mac}</b>.<br>
-                    Please wait up to 20 seconds. If it fails, restart the ESP32.
-                </div>` + html;
-                
-                // Disable connect buttons to prevent double-rebooting
-                setTimeout(() => {
-                    document.querySelectorAll('button').forEach(b => b.disabled = true);
-                }, 100);
-            }
-            document.getElementById('savedDevicesList').innerHTML = html;
-        });
-        
+        function loadStatus() {
+            fetch('/api/status').then(function(r){return r.json();}).then(function(d){
+                var html = "";
+                if (d.devices && d.devices.length > 0) {
+                    for (var i = 0; i < d.devices.length; i++) {
+                        var name = d.devices[i];
+                        html += '<div style="display:flex; justify-content:space-between; background:#2c2c2c; padding:8px; margin-bottom:5px; border-radius:5px; align-items:center;">' +
+                            '<span>' + name + '</span>' +
+                            '<button class="danger" onclick="deleteMac(\'' + name + '\')">Delete</button>' +
+                        '</div>';
+                    }
+                } else {
+                    html = "<p style='color:#aaa;'>No speakers saved yet.</p>";
+                }
+                if (d.pending_mac && d.pending_mac !== "") {
+                    html = '<div style="background:#b08d00; color:#fff; padding:10px; margin-bottom:10px; border-radius:5px;">' +
+                        '<b>Connecting to ' + d.pending_mac + '...</b><br>Please wait up to 20 seconds.' +
+                    '</div>' + html;
+                }
+                document.getElementById('savedDevicesList').innerHTML = html;
+            });
+        }
+        loadStatus();
         function saveMac() {
-            let m = document.getElementById('mac').value;
-            connectMac(m);
+            var m = document.getElementById('mac').value;
+            if (m) connectMac(m);
         }
         function connectMac(m) {
-            fetch('/api/connect?mac='+encodeURIComponent(m)).then(()=>{ 
-                location.reload(); 
+            fetch('/api/connect?mac=' + encodeURIComponent(m)).then(function(){
+                location.reload();
             });
         }
         function deleteMac(name) {
-            if(confirm("Delete " + name + "?")) {
-                fetch('/api/delete?mac='+encodeURIComponent(name)).then(()=>{ 
-                    location.reload(); 
+            if (confirm("Delete " + name + "?")) {
+                fetch('/api/delete?mac=' + encodeURIComponent(name)).then(function(){
+                    location.reload();
                 });
             }
         }
         function ota() {
-            fetch('/api/ota').then(()=>alert('OTA Update started...'));
+            fetch('/api/ota').then(function(){ alert('OTA started...'); });
         }
-        let fetchInterval = null;
         function scanBT() {
-            if (fetchInterval) clearInterval(fetchInterval);
-            
-            let resDiv = document.getElementById('scanResults');
-            resDiv.innerHTML = `<div style='padding:10px;text-align:center;'>Fetching live list...</div>`;
-            
-            let updateUI = (d) => {
-                let html = "";
-                if (d.length === 0) {
-                    html += `<div style='padding:10px;text-align:center;color:#888;'>No devices seen recently.<br><small>(Ensure speaker is in pairing mode)</small></div>`;
+            var resDiv = document.getElementById('scanResults');
+            resDiv.innerHTML = "<div style='padding:10px;text-align:center;'>Scanning...</div>";
+            fetch('/api/bt/results').then(function(r){return r.json();}).then(function(d){
+                var html = "";
+                if (!d || d.length === 0) {
+                    html = "<div style='padding:10px;text-align:center;color:#aaa;'>No devices found nearby.<br><small>(Ensure speaker is in pairing mode)</small></div>";
                 } else {
-                    d.forEach(name => {
-                        let cleanName = name.replace(/"/g, '&quot;');
-                        html += `<div style='padding:8px; border-bottom:1px solid #444;'>
-                                    <button style='width:100%; text-align:left; background:transparent; color:#bb86fc; font-weight:bold; font-size:16px;' onclick='connectToName("${cleanName}")'>
-                                        🔗 ${name}
-                                    </button>
-                                 </div>`;
-                    });
+                    for (var i = 0; i < d.length; i++) {
+                        var name = d[i];
+                        html += "<div style='padding:5px; border-bottom:1px solid #444;'>" +
+                            "<button style='width:100%; text-align:left; background:transparent; color:#bb86fc; font-size:15px;' onclick='connectMac(\"" + name + "\")'>" +
+                                "Connect: " + name +
+                            "</button>" +
+                        "</div>";
+                    }
                 }
                 resDiv.innerHTML = html;
-            };
-
-            let fetchList = () => {
-                fetch('/api/bt/results').then(r=>r.json()).then(d=>updateUI(d));
-            };
-            
-            fetchList();
-            fetchInterval = setInterval(fetchList, 2000);
-        }
-        function connectToName(name) {
-            document.getElementById('mac').value = name;
-            saveMac();
+            });
         }
     </script>
 </body>
-</html>
-)HTML";
+</html>)HTML";
 
 WebServerManager::WebServerManager() {
     otaRequested = false;
@@ -160,15 +132,7 @@ void WebServerManager::begin() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         Serial.printf("[WebServer] GET / requested from %s - Free heap: %u\n", 
                       request->client()->remoteIP().toString().c_str(), ESP.getFreeHeap());
-        if (SPIFFS.exists("/index.html")) {
-            AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/index.html", "text/html");
-            response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-            request->send(response);
-        } else {
-            AsyncWebServerResponse *response = request->beginResponse(200, "text/html", html_page);
-            response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-            request->send(response);
-        }
+        request->send(200, "text/html", html_page);
     });
     
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
