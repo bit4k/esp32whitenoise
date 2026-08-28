@@ -90,13 +90,6 @@ void setup() {
     
     // Init BT Audio LAST to ensure WiFi/OTA/Webserver have enough memory to initialize
     btAudio.begin(devs);
-    
-    if (devs.size() > 0) {
-        // Play welcome/current noise track announcement after a short delay to let connection establish
-        delay(3000);
-        String initialMsg = String("/") + String(type) + ".mp3";
-        btAudio.playAnnouncement(initialMsg.c_str());
-    }
 }
 
 void loop() {

@@ -512,8 +512,12 @@ void BTAudio::disconnect() {
 }
 
 void BTAudio::reconnect() {
+    static uint32_t lastConnectAttempt = 0;
     if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED) return;
     
+    if (millis() - lastConnectAttempt < 30000) return; // Rate-limit reconnection attempts to 30s to allow ESP-IDF stack queue cleanup
+    lastConnectAttempt = millis();
+
     if (s_has_peer_bda) {
         Serial.println("[BTAudio] Reconnecting to saved peer address...");
         esp_a2d_source_connect(s_peer_bda);
