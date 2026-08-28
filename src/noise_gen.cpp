@@ -42,14 +42,20 @@ const char* NoiseGenerator::getTypeName(int typeIndex) {
     return "Unknown";
 }
 
+static uint32_t fast_rand_seed = 123456789;
+inline uint32_t fast_rand() {
+    fast_rand_seed = fast_rand_seed * 1664525 + 1013904223;
+    return fast_rand_seed;
+}
+
 int16_t NoiseGenerator::generateWhite() {
     // Generate random number between -32768 and 32767
-    return (int16_t)(esp_random() % 65536 - 32768);
+    return (int16_t)(fast_rand() % 65536 - 32768);
 }
 
 int16_t NoiseGenerator::generatePink() {
     // Voss-McCartney algorithm approximation or Paul Kellett's method
-    float white = ((float)(esp_random() % 65536) - 32768.0f) / 32768.0f;
+    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
     pink_b0 = 0.99886f * pink_b0 + white * 0.0555179f;
     pink_b1 = 0.99332f * pink_b1 + white * 0.0750759f;
     pink_b2 = 0.96900f * pink_b2 + white * 0.1538520f;
@@ -67,7 +73,7 @@ int16_t NoiseGenerator::generatePink() {
 }
 
 int16_t NoiseGenerator::generateBrown() {
-    float white = ((float)(esp_random() % 65536) - 32768.0f) / 32768.0f;
+    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
     brown_out = (brown_out + (0.02f * white)) / 1.02f;
     float out = brown_out * 3.5f; // Gain adjust
     
@@ -78,7 +84,7 @@ int16_t NoiseGenerator::generateBrown() {
 }
 
 int16_t NoiseGenerator::generateBlue() {
-    float white = ((float)(esp_random() % 65536) - 32768.0f) / 32768.0f;
+    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
     float out = white - blue_last;
     blue_last = white;
     
@@ -90,7 +96,7 @@ int16_t NoiseGenerator::generateBlue() {
 
 int16_t NoiseGenerator::generateViolet() {
     // Differentiation of blue noise or simple highpass
-    float white = ((float)(esp_random() % 65536) - 32768.0f) / 32768.0f;
+    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
     float blue = white - blue_last;
     blue_last = white;
     static float violet_last = 0;
