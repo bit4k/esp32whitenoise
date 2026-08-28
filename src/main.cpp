@@ -84,8 +84,8 @@ void setup() {
             Serial.println("mDNS responder started: http://white-noise.local");
         }
         
-        // Check for updates automatically
-        webServer.autoCheckOTA();
+        // Check for updates automatically (Disabled auto-reboot on startup)
+        // webServer.autoCheckOTA();
     }
     
     // Init BT Audio LAST to ensure WiFi/OTA/Webserver have enough memory to initialize
