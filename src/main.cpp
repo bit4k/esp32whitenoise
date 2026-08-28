@@ -10,11 +10,31 @@
 #include <esp_gap_bt_api.h>
 
 WiFiManager wm;
-Ticker ledTicker;
-const int LED_PIN = 5; // Wemos LOLIN32 (mit Battery Connector) nutzt oft Pin 5
+const int LED_PIN = 5; // Wemos LOLIN32 / ESP32 LED Pin
 
-void toggleLED() {
-    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+void handleLED() {
+    static uint32_t lastCycle = 0;
+    static bool ledActive = false;
+    uint32_t now = millis();
+    bool isConn = btAudio.isConnected();
+
+    if (isConn) {
+        // Bluetooth Connected: Ultra-short 15ms flash once every 3 seconds (non-intrusive for sleep)
+        if (!ledActive && (now - lastCycle >= 3000)) {
+            lastCycle = now;
+            ledActive = true;
+            digitalWrite(LED_PIN, HIGH);
+        } else if (ledActive && (now - lastCycle >= 15)) {
+            ledActive = false;
+            digitalWrite(LED_PIN, LOW);
+        }
+    } else {
+        // Disconnected / Setup Mode: Slow blink (500ms ON / 500ms OFF)
+        if (now - lastCycle >= 500) {
+            lastCycle = now;
+            digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+        }
+    }
 }
 
 // Timer and Disconnect logic
@@ -28,7 +48,7 @@ void setup() {
     
     // Init LED
     pinMode(LED_PIN, OUTPUT);
-    ledTicker.attach(1.0, toggleLED); // Slow blink (1s) initially
+    digitalWrite(LED_PIN, LOW);
     
     // Init Storage
     storage.begin();
@@ -85,6 +105,7 @@ void loop() {
     // Process async tasks
     webServer.loop();
     btAudio.loop();
+    handleLED();
     
     // Timer Logic
     static bool wasConnected = false;
@@ -102,12 +123,6 @@ void loop() {
         }
         wasConnected = isConn;
         wasPaused = isPaused;
-        
-        if (isConn && !isPaused) {
-            ledTicker.attach(0.2, toggleLED); // Fast blink when playing
-        } else {
-            ledTicker.attach(1.0, toggleLED); // Slow blink when disconnected or paused
-        }
     }
 
     if (btAudio.getTimerState() != TIMER_ENDLESS) {
