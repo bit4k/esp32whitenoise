@@ -148,78 +148,10 @@ WebServerManager::WebServerManager() {
     otaRequested = false;
 }
 
-class StaticHtmlResponse : public AsyncWebServerResponse {
-  private:
-    const char* _content;
-    size_t _contentLength;
-    size_t _sentLength;
-    size_t _ackedLength;
-    String _head;
-    
-  public:
-    StaticHtmlResponse(const char* content) {
-        _code = 200;
-        _contentType = "text/html";
-        _content = content;
-        _contentLength = strlen(content);
-        _sentLength = 0;
-        _ackedLength = 0;
-    }
-    
-    bool _sourceValid() const override { return true; }
-    
-    void _respond(AsyncWebServerRequest *request) override {
-        _head = String("HTTP/1.1 200 OK\r\n");
-        _head += "Content-Type: text/html\r\n";
-        _head += "Content-Length: ";
-        _head += String(_contentLength);
-        _head += "\r\nConnection: close\r\n\r\n";
-        _state = RESPONSE_HEADERS;
-        _ack(request, 0, 0);
-    }
-    
-    size_t _ack(AsyncWebServerRequest *request, size_t len, uint32_t time) override {
-        if (_state == RESPONSE_HEADERS) {
-            size_t outLen = _head.length() - _ackedLength;
-            size_t space = request->client()->space();
-            if (outLen > space) outLen = space;
-            if (outLen) {
-                size_t sent = request->client()->write((const char*)_head.c_str() + _ackedLength, outLen);
-                _ackedLength += sent;
-                return sent;
-            }
-            if (_ackedLength == _head.length()) {
-                _state = RESPONSE_CONTENT;
-                _ackedLength = 0;
-            }
-        }
-        
-        if (_state == RESPONSE_CONTENT) {
-            size_t outLen = _contentLength - _sentLength;
-            size_t space = request->client()->space();
-            if (outLen > space) outLen = space;
-            if (outLen) {
-                size_t sent = request->client()->write(_content + _sentLength, outLen);
-                _sentLength += sent;
-                if (_sentLength == _contentLength) {
-                    _state = RESPONSE_WAIT_ACK;
-                }
-                return sent;
-            }
-        }
-        
-        if (_state == RESPONSE_WAIT_ACK) {
-            _state = RESPONSE_END;
-        }
-        
-        return 0;
-    }
-};
-
 void WebServerManager::begin() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         Serial.printf("[WebServer] GET / - Free heap: %u, Max block: %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-        request->send(new StaticHtmlResponse(html_page));
+        request->send(200, "text/html", html_page);
     });
     
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
