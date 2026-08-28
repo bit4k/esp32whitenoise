@@ -52,6 +52,12 @@ static AudioOutputRingBuf *outBuf = nullptr;
 static std::vector<ScannedDevice> s_foundDevices;
 static std::vector<String> s_targetDevices;
 
+// Static preallocated buffers for MP3 decoder to prevent runtime heap fragmentation OOM
+static uint8_t s_madBuff[2560];
+static uint8_t s_madStreamBuf[128];
+static uint8_t s_madFrameBuf[2568];
+static uint8_t s_madSynthBuf[16600];
+
 String BTAudio::pendingDeviceName = "";
 
 // Beep Generator State
@@ -558,7 +564,10 @@ void BTAudio::playAnnouncement(const char* filepath) {
     if (fileSource) { delete fileSource; fileSource = nullptr; }
 
     fileSource = new AudioFileSourceSPIFFS(filepath);
-    mp3 = new AudioGeneratorMP3();
+    mp3 = new AudioGeneratorMP3(s_madBuff, sizeof(s_madBuff),
+                                s_madStreamBuf, sizeof(s_madStreamBuf),
+                                s_madFrameBuf, sizeof(s_madFrameBuf),
+                                s_madSynthBuf, sizeof(s_madSynthBuf));
     
     if (outBuf) {
         if (outBuf->rb) {
