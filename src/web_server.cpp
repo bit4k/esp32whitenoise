@@ -15,7 +15,7 @@ extern bool timerExpired;
 WebServerManager webServer;
 AsyncWebServer server(80);
 
-const char* html_page = R"HTML(
+const char html_page[] PROGMEM = R"HTML(
 <!DOCTYPE html>
 <html>
 <head>
@@ -158,7 +158,7 @@ void WebServerManager::scheduleConnect(const String& name) {
 void WebServerManager::begin() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         Serial.printf("[WebServer] GET / - Free heap: %u, Max block: %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-        AsyncWebServerResponse *response = request->beginResponse(200, "text/html", html_page);
+        AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", (const uint8_t*)html_page, strlen_P(html_page));
         response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
         request->send(response);
     });
