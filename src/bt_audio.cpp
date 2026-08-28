@@ -49,6 +49,7 @@ static AudioGeneratorMP3 *mp3 = nullptr;
 static AudioOutputRingBuf *outBuf = nullptr;
 static std::vector<ScannedDevice> s_foundDevices;
 static std::vector<String> s_targetDevices;
+static uint8_t s_mp3DecoderSpace[24000]; // Static BSS allocation to prevent heap OOM
 
 String BTAudio::pendingDeviceName = "";
 
@@ -513,10 +514,9 @@ void BTAudio::playAnnouncement(const char* filepath) {
     if (fileSource) { delete fileSource; fileSource = nullptr; }
 
     fileSource = new AudioFileSourceSPIFFS(filepath);
-    mp3 = new AudioGeneratorMP3();
+    mp3 = new AudioGeneratorMP3(s_mp3DecoderSpace, sizeof(s_mp3DecoderSpace));
     
     if (outBuf) {
-        Serial.printf("[BTAudio] Playing announcement: %s\n", filepath);
         if (outBuf->rb) {
             size_t dummy_bytes;
             while (uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &dummy_bytes, 0, 8192)) {
@@ -524,7 +524,15 @@ void BTAudio::playAnnouncement(const char* filepath) {
             }
         }
         outBuf->SetGain(2.5f);
-        mp3->begin(fileSource, outBuf);
+        bool ok = mp3->begin(fileSource, outBuf);
+        if (!ok) {
+            Serial.printf("[BTAudio] Error: mp3->begin() failed for %s!\n", filepath);
+            delete mp3; mp3 = nullptr;
+            delete fileSource; fileSource = nullptr;
+            return;
+        }
+        
+        Serial.printf("[BTAudio] Playing announcement: %s (Started OK)\n", filepath);
         
         // Pre-fill ringbuffer with initial MP3 audio frames
         while (mp3 && mp3->isRunning() && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024) {
