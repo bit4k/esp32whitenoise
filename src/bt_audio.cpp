@@ -535,11 +535,11 @@ void BTAudio::playAnnouncement(const char* filepath) {
         Serial.printf("[BTAudio] Playing announcement: %s (Started OK)\n", filepath);
         
         // Pre-fill ringbuffer with initial MP3 audio frames
-        while (mp3 && mp3->isRunning() && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024) {
+        do {
             if (!mp3->loop()) {
                 break;
             }
-        }
+        } while (mp3 && mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024);
     }
 }
 
@@ -563,14 +563,14 @@ void BTAudio::loop() {
     }
 
     if (mp3 && mp3->isRunning()) {
-        while (mp3 && mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024) {
+        do {
             if (!mp3->loop()) {
                 mp3->stop();
                 delete mp3; mp3 = nullptr;
                 delete fileSource; fileSource = nullptr;
                 break;
             }
-        }
+        } while (mp3 && mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024);
     } else if (mp3 && !mp3->isRunning()) {
         delete mp3; mp3 = nullptr;
         delete fileSource; fileSource = nullptr;

@@ -19,21 +19,19 @@ void handleLED() {
     bool isConn = btAudio.isConnected();
 
     if (isConn) {
-        // Bluetooth Connected: Ultra-short 15ms flash once every 3 seconds (non-intrusive for sleep)
+        // Bluetooth Connected: Ultra-short 15ms flash once every 3 seconds (active LOW)
         if (!ledActive && (now - lastCycle >= 3000)) {
             lastCycle = now;
             ledActive = true;
-            digitalWrite(LED_PIN, HIGH);
+            digitalWrite(LED_PIN, LOW); // ON
         } else if (ledActive && (now - lastCycle >= 15)) {
             ledActive = false;
-            digitalWrite(LED_PIN, LOW);
+            digitalWrite(LED_PIN, HIGH); // OFF
         }
     } else {
-        // Disconnected / Setup Mode: Slow blink (500ms ON / 500ms OFF)
-        if (now - lastCycle >= 500) {
-            lastCycle = now;
-            digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-        }
+        // Disconnected / No Bluetooth: LED ALWAYS OFF (Active LOW -> HIGH is OFF)
+        ledActive = false;
+        digitalWrite(LED_PIN, HIGH);
     }
 }
 
@@ -46,9 +44,9 @@ uint32_t disconnectTime = 0;
 void setup() {
     Serial.begin(115200);
     
-    // Init LED
+    // Init LED (Active LOW -> HIGH is OFF)
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(LED_PIN, HIGH);
     
     // Init Storage
     storage.begin();
