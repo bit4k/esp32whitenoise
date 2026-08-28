@@ -83,7 +83,7 @@ void BTAudio::triggerWarningBeep() {
 static portMUX_TYPE audioMux = portMUX_INITIALIZER_UNLOCKED;
 
 static int32_t bt_app_a2d_data_cb(uint8_t *data, int32_t len) {
-    if (len < 0 || data == NULL) return 0;
+    if (len <= 0 || data == NULL) return 0;
     
     // Fill buffer with zeroes if paused or audio not ready
     if (btAudio.isPaused || timerExpired) {
@@ -93,32 +93,24 @@ static int32_t bt_app_a2d_data_cb(uint8_t *data, int32_t len) {
     
     bool playingAnnouncement = btAudio.isAnnouncementPlaying();
     
-    portENTER_CRITICAL(&audioMux);
-    if (outBuf && outBuf->rb) {
+    if (playingAnnouncement && outBuf && outBuf->rb) {
         size_t bytes_received = 0;
         uint8_t *rb_data = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &bytes_received, 0, len);
         if (rb_data && bytes_received > 0) {
             memcpy(data, rb_data, bytes_received);
             vRingbufferReturnItem(outBuf->rb, rb_data);
-            portEXIT_CRITICAL(&audioMux);
             if (bytes_received < len) {
-                int32_t remaining = len - bytes_received;
-                if (playingAnnouncement) {
-                    memset(data + bytes_received, 0, remaining);
-                } else {
-                    noiseGen.getFrames((NoiseGenerator::Frame*)(data + bytes_received), remaining / 4);
-                }
+                memset(data + bytes_received, 0, len - bytes_received);
             }
+            return len;
+        } else {
+            memset(data, 0, len);
             return len;
         }
     }
-    portEXIT_CRITICAL(&audioMux);
     
-    if (playingAnnouncement) {
-        memset(data, 0, len);
-    } else {
-        noiseGen.getFrames((NoiseGenerator::Frame*)data, len / 4);
-    }
+    // Pure White Noise Generation (Zero locks, ultra-fast, 100% continuous and silk smooth!)
+    noiseGen.getFrames((NoiseGenerator::Frame*)data, len / 4);
     
     // Apply Volume Fade & Overlay Warning Beep if playing normal audio/noise
     if (!playingAnnouncement) {
@@ -713,7 +705,11 @@ void BTAudio::nextNoiseTrack() {
     Serial.printf("[BTAudio] Rauschen gewechselt auf Typ: %d\n", t);
     
     String filename = String("/") + String(t) + ".mp3";
-    playAnnouncement(filename.c_str());
+    if (SPIFFS.exists(filename.c_str())) {
+        playAnnouncement(filename.c_str());
+    } else {
+        triggerWarningBeep();
+    }
 }
 
 void BTAudio::toggleTimer() {
@@ -722,18 +718,29 @@ void BTAudio::toggleTimer() {
     if (timerState == TIMER_30_MIN) {
         nextState = TIMER_60_MIN;
         Serial.println("[BTAudio] Timer umgeschaltet auf: 60 Minuten");
-        playAnnouncement("/timer_60.mp3");
+        if (SPIFFS.exists("/timer_60.mp3")) {
+            playAnnouncement("/timer_60.mp3");
+        } else {
+            triggerWarningBeep();
+        }
     } else if (timerState == TIMER_60_MIN) {
         nextState = TIMER_ENDLESS;
         Serial.println("[BTAudio] Timer umgeschaltet auf: Endlos");
-        playAnnouncement("/timer_endless.mp3");
+        if (SPIFFS.exists("/timer_endless.mp3")) {
+            playAnnouncement("/timer_endless.mp3");
+        } else {
+            triggerWarningBeep();
+        }
     } else {
         nextState = TIMER_30_MIN;
         Serial.println("[BTAudio] Timer umgeschaltet auf: 30 Minuten");
-        playAnnouncement("/timer_30.mp3");
+        if (SPIFFS.exists("/timer_30.mp3")) {
+            playAnnouncement("/timer_30.mp3");
+        } else {
+            triggerWarningBeep();
+        }
     }
     timerState = nextState;
-    // We don't have saveLastTimerState in storage, we just rely on default timer
     resetTimer();
 }
 
