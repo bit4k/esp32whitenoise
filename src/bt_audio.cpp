@@ -18,6 +18,8 @@ static esp_a2d_connection_state_t s_a2d_conn_state = ESP_A2D_CONNECTION_STATE_DI
 static esp_a2d_audio_state_t s_a2d_audio_state = ESP_A2D_AUDIO_STATE_STOPPED;
 static esp_bd_addr_t s_peer_bda;
 static bool s_has_peer_bda = false;
+static bool s_is_discovering = false;
+static bool s_pending_connect = false;
 
 // Audio processing
 extern bool timerExpired;
@@ -347,11 +349,11 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
             // Check if it's our target device
             for (const String& target : s_targetDevices) {
                 if (target == name) {
-                    ESP_LOGI(BT_AV_TAG, "Found target device %s! Connecting...", name.c_str());
-                    esp_bt_gap_cancel_discovery();
+                    Serial.printf("[BTAudio] Found target device %s! Stopping discovery to connect...\n", name.c_str());
                     memcpy(s_peer_bda, param->disc_res.bda, ESP_BD_ADDR_LEN);
                     s_has_peer_bda = true;
-                    esp_a2d_source_connect(s_peer_bda);
+                    s_pending_connect = true;
+                    esp_bt_gap_cancel_discovery();
                     break;
                 }
             }
@@ -360,9 +362,16 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
     }
     case ESP_BT_GAP_DISC_STATE_CHANGED_EVT: {
         if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
-            ESP_LOGI(BT_AV_TAG, "Discovery stopped.");
+            Serial.println("[BTAudio] Discovery stopped.");
+            s_is_discovering = false;
+            if (s_pending_connect && s_has_peer_bda && s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+                s_pending_connect = false;
+                Serial.println("[BTAudio] Initiating A2DP connection to target device...");
+                esp_a2d_source_connect(s_peer_bda);
+            }
         } else if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED) {
-            ESP_LOGI(BT_AV_TAG, "Discovery started.");
+            Serial.println("[BTAudio] Discovery started.");
+            s_is_discovering = true;
         }
         break;
     }
@@ -447,8 +456,9 @@ void BTAudio::initBluetooth() {
 
 void BTAudio::startScan() {
     static uint32_t lastScanStart = 0;
-    if (millis() - lastScanStart > 30000) {
+    if (!s_is_discovering && (millis() - lastScanStart > 15000)) {
         lastScanStart = millis();
+        Serial.println("[BTAudio] Starting Bluetooth Discovery...");
         esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
     }
 }
@@ -480,7 +490,10 @@ void BTAudio::disconnect() {
 }
 
 void BTAudio::reconnect() {
+    if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED) return;
+    
     if (s_has_peer_bda) {
+        Serial.println("[BTAudio] Reconnecting to saved peer address...");
         esp_a2d_source_connect(s_peer_bda);
     } else {
         startScan();
