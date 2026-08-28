@@ -563,6 +563,10 @@ void BTAudio::reconnect() {
     static uint32_t lastConnectAttempt = 0;
     if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED || s_is_connecting) return;
     
+    // Defer the very first connection attempt after boot by 3 seconds to avoid collisions
+    // with the speaker's own auto-reconnect attempt!
+    if (lastConnectAttempt == 0 && millis() < 3000) return;
+    
     if (millis() - lastConnectAttempt < 5000) return; // Rate-limit reconnection attempts to 5s
     lastConnectAttempt = millis();
 
