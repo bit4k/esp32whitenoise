@@ -268,7 +268,8 @@ void WebServerManager::autoCheckOTA() {
 void WebServerManager::loop() {
     if (pendingRestartTime > 0 && millis() >= pendingRestartTime) {
         pendingRestartTime = 0;
-        Serial.printf("[WebServer] Saving target device '%s' and rebooting...\n", targetDeviceName.c_str());
+        Serial.printf("[WebServer] Saving target device '%s' permanently and rebooting...\n", targetDeviceName.c_str());
+        storage.addSavedDevice(targetDeviceName);
         storage.setPendingDevice(targetDeviceName);
         delay(100);
         ESP.restart();

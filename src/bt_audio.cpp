@@ -400,11 +400,12 @@ void BTAudio::begin(const std::vector<String>& savedDevices) {
     outBuf = new AudioOutputRingBuf();
     
     String pending = storage.popPendingDevice();
+    s_targetDevices = savedDevices;
     if (pending != "") {
         BTAudio::pendingDeviceName = pending;
-        s_targetDevices = {pending};
-    } else {
-        s_targetDevices = savedDevices;
+        if (std::find(s_targetDevices.begin(), s_targetDevices.end(), pending) == s_targetDevices.end()) {
+            s_targetDevices.push_back(pending);
+        }
     }
 
     Serial.println("[BTAudio] Initialized target devices list:");
