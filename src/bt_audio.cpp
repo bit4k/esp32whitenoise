@@ -507,8 +507,6 @@ std::vector<String> BTAudio::getScanResults() {
 
 void BTAudio::connectTo(const String& name) {
     storage.setPendingDevice(name);
-    delay(500);
-    ESP.restart();
 }
 
 void BTAudio::disconnect() {

@@ -146,6 +146,13 @@ const char* html_page = R"HTML(
 
 WebServerManager::WebServerManager() {
     otaRequested = false;
+    connectRequested = false;
+    pendingRestartTime = 0;
+}
+
+void WebServerManager::scheduleConnect(const String& name) {
+    targetDeviceName = name;
+    pendingRestartTime = millis() + 400;
 }
 
 void WebServerManager::begin() {
@@ -173,7 +180,8 @@ void WebServerManager::begin() {
     server.on("/api/connect", HTTP_GET, [](AsyncWebServerRequest *request){
         if(request->hasParam("mac")) {
             String mac = request->getParam("mac")->value();
-            btAudio.connectTo(mac); 
+            Serial.printf("[WebServer] GET /api/connect?mac=%s\n", mac.c_str());
+            webServer.scheduleConnect(mac); 
             request->send(200, "text/plain", "OK");
         } else {
             request->send(400, "text/plain", "Missing MAC/Name");
@@ -258,6 +266,14 @@ void WebServerManager::autoCheckOTA() {
 }
 
 void WebServerManager::loop() {
+    if (pendingRestartTime > 0 && millis() >= pendingRestartTime) {
+        pendingRestartTime = 0;
+        Serial.printf("[WebServer] Saving target device '%s' and rebooting...\n", targetDeviceName.c_str());
+        storage.setPendingDevice(targetDeviceName);
+        delay(100);
+        ESP.restart();
+    }
+
     if (otaRequested) {
         otaRequested = false;
         Serial.println("OTA Update requested. Rebooting into factory partition...");
