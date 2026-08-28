@@ -219,6 +219,13 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         uint8_t *bda = param->conn_stat.remote_bda;
         Serial.printf("[BTAudio] AVRC TG conn_state evt: state %d, [%02x:%02x:%02x:%02x:%02x:%02x]\n",
                  param->conn_stat.connected, bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
+        if (param->conn_stat.connected == 1 && s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
+            memcpy(s_peer_bda, bda, ESP_BD_ADDR_LEN);
+            s_has_peer_bda = true;
+            s_is_connecting = true;
+            Serial.println("[BTAudio] AVRCP connected! Connecting matching A2DP audio channel...");
+            esp_a2d_source_connect(s_peer_bda);
+        }
         break;
     }
     case ESP_AVRC_TG_REGISTER_NOTIFICATION_EVT: {
@@ -563,7 +570,7 @@ void BTAudio::reconnect() {
     static uint32_t lastConnectAttempt = 0;
     if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED || s_is_connecting) return;
     
-    if (millis() - lastConnectAttempt < 30000) return; // Rate-limit reconnection attempts to 30s to allow ESP-IDF stack queue cleanup
+    if (millis() - lastConnectAttempt < 5000) return; // Rate-limit reconnection attempts to 5s
     lastConnectAttempt = millis();
 
     if (s_has_peer_bda) {
