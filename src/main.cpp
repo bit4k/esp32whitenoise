@@ -69,23 +69,32 @@ void setup() {
     // Init WiFiManager
     // wm.resetSettings(); // for debugging
     WiFi.setHostname("white-noise");
+    
+    // Register AP Callback to print SoftAP IP & details when setup portal starts
+    wm.setAPCallback([](WiFiManager *myWiFiManager) {
+        Serial.println("\n============================================");
+        Serial.println("[WiFiManager] SoftAP Config Portal Started!");
+        Serial.printf("[WiFiManager] AP SSID: %s\n", myWiFiManager->getConfigPortalSSID().c_str());
+        Serial.printf("[WiFiManager] AP IP Address: %s\n", WiFi.softAPIP().toString().c_str());
+        Serial.println("============================================\n");
+    });
+    
     bool res = wm.autoConnect("ESP32_WhiteNoise_Setup");
     if(!res) {
-        Serial.println("Failed to connect");
-        // ESP.restart();
+        Serial.println("\n[WiFiManager] Failed to connect or timeout reached.");
     } else {
-        Serial.println("connected to wifi)");
+        Serial.println("\n============================================");
+        Serial.println("[WiFi] Connected to WiFi!");
+        Serial.printf("[WiFi] STA IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.println("============================================\n");
         
-        // Start Web Server first
+        // Start Web Server
         webServer.begin();
         
         // Start mDNS
         if (MDNS.begin("white-noise")) {
-            Serial.println("mDNS responder started: http://white-noise.local");
+            Serial.println("[mDNS] Responder started: http://white-noise.local");
         }
-        
-        // Check for updates automatically (Disabled auto-reboot on startup)
-        // webServer.autoCheckOTA();
     }
     
     // Init BT Audio LAST to ensure WiFi/OTA/Webserver have enough memory to initialize

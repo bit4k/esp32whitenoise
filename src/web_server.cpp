@@ -279,6 +279,12 @@ void WebServerManager::begin() {
         webServer.triggerOTA();
     });
 
+    server.onNotFound([](AsyncWebServerRequest *request){
+        Serial.printf("[WebServer] HTTP %s %s requested from %s\n", 
+                      request->methodToString(), request->url().c_str(), request->client()->remoteIP().toString().c_str());
+        request->send(404, "text/plain", "Not Found");
+    });
+
     server.begin();
 }
 
