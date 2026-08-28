@@ -51,6 +51,7 @@ static AudioGeneratorMP3 *mp3 = nullptr;
 static AudioOutputRingBuf *outBuf = nullptr;
 static std::vector<ScannedDevice> s_foundDevices;
 static std::vector<String> s_targetDevices;
+static bool s_is_connecting = false;
 
 // Static preallocated buffers for MP3 decoder to prevent runtime heap fragmentation OOM
 static uint8_t s_madBuff[2560];
@@ -167,6 +168,7 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
         s_a2d_conn_state = param->conn_stat.state;
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
             ESP_LOGI(BT_AV_TAG, "A2DP Connected");
+            s_is_connecting = false;
             memcpy(s_peer_bda, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
             s_has_peer_bda = true;
             btAudio.isPaused = false; // Reset pause on connect
@@ -180,6 +182,7 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
             }
         } else if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
             ESP_LOGI(BT_AV_TAG, "A2DP Disconnected");
+            s_is_connecting = false;
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         }
         break;
@@ -371,8 +374,9 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
         if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
             Serial.println("[BTAudio] Discovery stopped.");
             s_is_discovering = false;
-            if (s_pending_connect && s_has_peer_bda && s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+            if (s_pending_connect && s_has_peer_bda && s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
                 s_pending_connect = false;
+                s_is_connecting = true;
                 Serial.println("[BTAudio] Initiating A2DP connection to target device...");
                 esp_a2d_source_connect(s_peer_bda);
             }
@@ -530,7 +534,8 @@ void BTAudio::connectTo(const String& name) {
             if (s_is_discovering) {
                 esp_bt_gap_cancel_discovery();
             }
-            if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+            if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
+                s_is_connecting = true;
                 Serial.println("[BTAudio] Initiating direct A2DP connection immediately...");
                 esp_a2d_source_connect(s_peer_bda);
             }
@@ -550,12 +555,13 @@ void BTAudio::disconnect() {
 
 void BTAudio::reconnect() {
     static uint32_t lastConnectAttempt = 0;
-    if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED) return;
+    if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED || s_is_connecting) return;
     
     if (millis() - lastConnectAttempt < 30000) return; // Rate-limit reconnection attempts to 30s to allow ESP-IDF stack queue cleanup
     lastConnectAttempt = millis();
 
     if (s_has_peer_bda) {
+        s_is_connecting = true;
         Serial.println("[BTAudio] Reconnecting to saved peer address...");
         esp_a2d_source_connect(s_peer_bda);
     } else {
