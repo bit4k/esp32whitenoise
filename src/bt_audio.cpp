@@ -218,7 +218,7 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         }
         break;
     }
-    case ESP_AVRC_TG_SET_ABSOLUTE_VOLUME_EVT: {
+    case ESP_AVRC_TG_SET_ABSOLUTE_VOLUME_CMD_EVT: {
         Serial.printf("[BTAudio] AVRCP TG Set Absolute Volume: %d\n", param->set_abs_vol.volume);
         btAudio.resetTimerPending = true;
         break;
@@ -261,9 +261,11 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param) {
     if (event == ESP_AVRC_CT_CONNECTION_STATE_EVT) {
         Serial.printf("[BTAudio] AVRC CT conn_state evt: state %d\n", param->conn_stat.connected);
-    } else if (event == ESP_AVRC_CT_CHANGE_VOLUME_EVT) {
-        Serial.printf("[BTAudio] AVRCP CT Volume Change: %d\n", param->change_ntf.volume);
-        btAudio.resetTimerPending = true;
+    } else if (event == ESP_AVRC_CT_CHANGE_NOTIFY_EVT) {
+        if (param->change_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
+            Serial.println("[BTAudio] AVRCP CT Volume Change Notification received!");
+            btAudio.resetTimerPending = true;
+        }
     }
 }
 
@@ -516,7 +518,10 @@ void BTAudio::playAnnouncement(const char* filepath) {
     if (outBuf) {
         Serial.printf("[BTAudio] Playing announcement: %s\n", filepath);
         if (outBuf->rb) {
-            xRingbufferReset(outBuf->rb);
+            size_t dummy_bytes;
+            while (uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &dummy_bytes, 0, 8192)) {
+                vRingbufferReturnItem(outBuf->rb, item);
+            }
         }
         outBuf->SetGain(2.5f);
         mp3->begin(fileSource, outBuf);
