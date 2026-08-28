@@ -51,7 +51,7 @@ static AudioGeneratorMP3 *mp3 = nullptr;
 static AudioOutputRingBuf *outBuf = nullptr;
 static std::vector<ScannedDevice> s_foundDevices;
 static std::vector<String> s_targetDevices;
-static uint8_t s_mp3DecoderSpace[24000]; // Static BSS allocation to prevent heap OOM
+static uint8_t *s_mp3DecoderSpace = nullptr; // Dynamically allocated on-demand during announcement play
 
 String BTAudio::pendingDeviceName = "";
 
@@ -548,9 +548,16 @@ void BTAudio::playAnnouncement(const char* filepath) {
     }
     if (mp3) { delete mp3; mp3 = nullptr; }
     if (fileSource) { delete fileSource; fileSource = nullptr; }
+    if (s_mp3DecoderSpace) { free(s_mp3DecoderSpace); s_mp3DecoderSpace = nullptr; }
+
+    s_mp3DecoderSpace = (uint8_t *)malloc(22000);
+    if (!s_mp3DecoderSpace) {
+        Serial.println("[BTAudio] Error: Not enough heap memory to allocate MP3 decoder buffer!");
+        return;
+    }
 
     fileSource = new AudioFileSourceSPIFFS(filepath);
-    mp3 = new AudioGeneratorMP3(s_mp3DecoderSpace, sizeof(s_mp3DecoderSpace));
+    mp3 = new AudioGeneratorMP3(s_mp3DecoderSpace, 22000);
     
     if (outBuf) {
         if (outBuf->rb) {
@@ -604,12 +611,14 @@ void BTAudio::loop() {
                 mp3->stop();
                 delete mp3; mp3 = nullptr;
                 delete fileSource; fileSource = nullptr;
+                if (s_mp3DecoderSpace) { free(s_mp3DecoderSpace); s_mp3DecoderSpace = nullptr; }
                 break;
             }
         } while (mp3 && mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024);
     } else if (mp3 && !mp3->isRunning()) {
         delete mp3; mp3 = nullptr;
         delete fileSource; fileSource = nullptr;
+        if (s_mp3DecoderSpace) { free(s_mp3DecoderSpace); s_mp3DecoderSpace = nullptr; }
     }
     
     if (mediaReadyPending && (millis() - connectedTime > 1500)) {
