@@ -89,6 +89,19 @@ String Storage::popPendingDevice() {
     return pending;
 }
 
+void Storage::saveSavedMac(const uint8_t* bda) {
+    if (bda) {
+        prefs.putBytes("last_bda", bda, 6);
+    }
+}
+
+bool Storage::getSavedMac(uint8_t* bda) {
+    if (bda && prefs.isKey("last_bda")) {
+        return prefs.getBytes("last_bda", bda, 6) == 6;
+    }
+    return false;
+}
+
 void Storage::saveLastNoiseType(int typeIndex) {
     prefs.putInt("noise_type", typeIndex);
 }

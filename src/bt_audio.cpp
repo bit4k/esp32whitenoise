@@ -399,6 +399,12 @@ BTAudio::BTAudio() {
 void BTAudio::begin(const std::vector<String>& savedDevices) {
     outBuf = new AudioOutputRingBuf();
     
+    if (storage.getSavedMac(s_peer_bda)) {
+        s_has_peer_bda = true;
+        Serial.printf("[BTAudio] Loaded saved MAC address: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                      s_peer_bda[0], s_peer_bda[1], s_peer_bda[2], s_peer_bda[3], s_peer_bda[4], s_peer_bda[5]);
+    }
+    
     String pending = storage.popPendingDevice();
     s_targetDevices = savedDevices;
     if (pending != "") {
@@ -507,7 +513,33 @@ std::vector<String> BTAudio::getScanResults() {
 }
 
 void BTAudio::connectTo(const String& name) {
-    storage.setPendingDevice(name);
+    storage.addSavedDevice(name);
+    if (std::find(s_targetDevices.begin(), s_targetDevices.end(), name) == s_targetDevices.end()) {
+        s_targetDevices.push_back(name);
+    }
+    
+    // Check if the target device is already in s_foundDevices list from scanning
+    for (auto& dev : s_foundDevices) {
+        if (dev.name.equalsIgnoreCase(name) || name.indexOf(dev.name) >= 0 || dev.name.indexOf(name) >= 0) {
+            Serial.printf("[BTAudio] Instant connect to scanned device '%s' (%02x:%02x:%02x:%02x:%02x:%02x)!\n", 
+                          dev.name.c_str(), dev.bda[0], dev.bda[1], dev.bda[2], dev.bda[3], dev.bda[4], dev.bda[5]);
+            memcpy(s_peer_bda, dev.bda, ESP_BD_ADDR_LEN);
+            s_has_peer_bda = true;
+            storage.saveSavedMac(s_peer_bda);
+            
+            if (s_is_discovering) {
+                esp_bt_gap_cancel_discovery();
+            }
+            if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+                Serial.println("[BTAudio] Initiating direct A2DP connection immediately...");
+                esp_a2d_source_connect(s_peer_bda);
+            }
+            return;
+        }
+    }
+    
+    // Not found in active scan list yet, trigger discovery scan
+    startScan();
 }
 
 void BTAudio::disconnect() {

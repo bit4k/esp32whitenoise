@@ -155,7 +155,7 @@ void WebServerManager::begin() {
         if(server.hasArg("mac")) {
             String mac = server.arg("mac");
             Serial.printf("[WebServer] GET /api/connect?mac=%s\n", mac.c_str());
-            webServer.scheduleConnect(mac);
+            btAudio.connectTo(mac);
             server.send(200, "text/plain", "OK");
         } else {
             server.send(400, "text/plain", "Missing MAC/Name");

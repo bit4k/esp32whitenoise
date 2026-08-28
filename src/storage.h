@@ -17,6 +17,10 @@ public:
     void setPendingDevice(const String& name);
     String popPendingDevice();
     
+    // Save and load last MAC address
+    void saveSavedMac(const uint8_t* bda);
+    bool getSavedMac(uint8_t* bda);
+    
     // Save and load last selected noise type index
     void saveLastNoiseType(int typeIndex);
     int getLastNoiseType();
