@@ -88,6 +88,10 @@ void setup() {
         Serial.printf("[WiFi] STA IP Address: %s\n", WiFi.localIP().toString().c_str());
         Serial.println("============================================\n");
         
+        // Stop WiFiManager server so Port 80 is freed for AsyncWebServer
+        wm.stopWebPortal();
+        wm.stopConfigPortal();
+        
         // Start Web Server
         webServer.begin();
         

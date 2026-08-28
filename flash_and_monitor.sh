@@ -6,5 +6,6 @@ echo "Starte Build, Upload und automatischen Serial Monitor..."
 echo "Zum Beenden des Monitors später 'Ctrl+C' drücken."
 echo "============================================"
 
-# pio run mit '-t upload' und '-t monitor' kombiniert alles in einem Befehl!
+# pio run: Schritt 1 = Dateisystem (MP3s), Schritt 2 = Firmware + Serial Monitor
+pio run -e app -t uploadfs
 pio run -e app -t upload -t monitor
