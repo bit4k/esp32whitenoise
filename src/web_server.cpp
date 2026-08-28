@@ -157,10 +157,17 @@ void WebServerManager::scheduleConnect(const String& name) {
 
 void WebServerManager::begin() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-        Serial.printf("[WebServer] GET / - Free heap: %u, Max block: %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-        AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", (const uint8_t*)html_page, strlen_P(html_page));
-        response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-        request->send(response);
+        Serial.printf("[WebServer] GET / requested from %s - Free heap: %u\n", 
+                      request->client()->remoteIP().toString().c_str(), ESP.getFreeHeap());
+        if (SPIFFS.exists("/index.html")) {
+            AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/index.html", "text/html");
+            response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+            request->send(response);
+        } else {
+            AsyncWebServerResponse *response = request->beginResponse(200, "text/html", html_page);
+            response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+            request->send(response);
+        }
     });
     
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
