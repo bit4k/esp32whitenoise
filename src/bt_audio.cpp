@@ -25,6 +25,7 @@ class AudioOutputRingBuf : public AudioOutput {
 public:
     RingbufHandle_t rb;
     AudioOutputRingBuf() {
+        SetGain(2.5f);
         rb = xRingbufferCreate(8192, RINGBUF_TYPE_BYTEBUF);
     }
     ~AudioOutputRingBuf() {
@@ -33,7 +34,11 @@ public:
     virtual bool begin() override { return true; }
     virtual bool ConsumeSample(int16_t sample[2]) override {
         if (!rb) return false;
-        xRingbufferSend(rb, sample, 4, pdMS_TO_TICKS(10));
+        MakeSampleStereo16(sample);
+        int16_t s[2];
+        s[0] = Amplify(sample[0]);
+        s[1] = Amplify(sample[1]);
+        xRingbufferSend(rb, s, 4, pdMS_TO_TICKS(10));
         return true;
     }
     virtual bool stop() override { return true; }
@@ -213,6 +218,11 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         }
         break;
     }
+    case ESP_AVRC_TG_SET_ABSOLUTE_VOLUME_EVT: {
+        Serial.printf("[BTAudio] AVRCP TG Set Absolute Volume: %d\n", param->set_abs_vol.volume);
+        btAudio.resetTimerPending = true;
+        break;
+    }
     case ESP_AVRC_TG_PASSTHROUGH_CMD_EVT: {
         if (param->psth_cmd.key_state == 0) { // Pressed
             Serial.printf("[BTAudio] AVRCP PT_CMD %d\n", param->psth_cmd.key_code);
@@ -236,6 +246,9 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_BACKWARD) {
                 Serial.println("[BTAudio] -> Action: Backward (Hardware Triple-Click!)");
                 btAudio.nextTrackPending = true;
+            } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_VOL_UP || param->psth_cmd.key_code == ESP_AVRC_PT_CMD_VOL_DOWN) {
+                Serial.println("[BTAudio] -> Volume Button Pressed on Speaker!");
+                btAudio.resetTimerPending = true;
             }
         }
         break;
@@ -248,6 +261,9 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param) {
     if (event == ESP_AVRC_CT_CONNECTION_STATE_EVT) {
         Serial.printf("[BTAudio] AVRC CT conn_state evt: state %d\n", param->conn_stat.connected);
+    } else if (event == ESP_AVRC_CT_CHANGE_VOLUME_EVT) {
+        Serial.printf("[BTAudio] AVRCP CT Volume Change: %d\n", param->change_ntf.volume);
+        btAudio.resetTimerPending = true;
     }
 }
 
@@ -477,7 +493,9 @@ bool BTAudio::isDisconnected() {
 }
 
 bool BTAudio::isAnnouncementPlaying() {
-    return (mp3 && mp3->isRunning());
+    bool decoding = (mp3 && mp3->isRunning());
+    bool rbHasData = (outBuf && outBuf->rb && (xRingbufferGetCurFreeSize(outBuf->rb) < 8192));
+    return decoding || rbHasData;
 }
 
 void BTAudio::playAnnouncement(const char* filepath) {
@@ -489,19 +507,39 @@ void BTAudio::playAnnouncement(const char* filepath) {
     if (mp3 && mp3->isRunning()) {
         mp3->stop();
     }
-    if (mp3) delete mp3;
-    if (fileSource) delete fileSource;
+    if (mp3) { delete mp3; mp3 = nullptr; }
+    if (fileSource) { delete fileSource; fileSource = nullptr; }
 
     fileSource = new AudioFileSourceSPIFFS(filepath);
     mp3 = new AudioGeneratorMP3();
     
     if (outBuf) {
         Serial.printf("[BTAudio] Playing announcement: %s\n", filepath);
+        if (outBuf->rb) {
+            xRingbufferReset(outBuf->rb);
+        }
+        outBuf->SetGain(2.5f);
         mp3->begin(fileSource, outBuf);
+        
+        // Pre-fill ringbuffer with initial MP3 audio frames
+        while (mp3 && mp3->isRunning() && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024) {
+            if (!mp3->loop()) {
+                break;
+            }
+        }
     }
 }
 
 void BTAudio::loop() {
+    if (resetTimerPending) {
+        resetTimerPending = false;
+        if (getFadeFactor() < 1.0f || timerExpired) {
+            Serial.println("[BTAudio] Lautstärke am Lautsprecher verändert während Ausblendung -> Sleep Timer neu gestartet!");
+            timerExpired = false;
+            resetTimer();
+        }
+    }
+
     if (toggleTimerPending) {
         toggleTimerPending = false;
         toggleTimer();
@@ -520,6 +558,9 @@ void BTAudio::loop() {
                 break;
             }
         }
+    } else if (mp3 && !mp3->isRunning()) {
+        delete mp3; mp3 = nullptr;
+        delete fileSource; fileSource = nullptr;
     }
     
     if (mediaReadyPending && (millis() - connectedTime > 1500)) {

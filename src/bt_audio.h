@@ -47,6 +47,7 @@ public:
     
     volatile bool toggleTimerPending = false;
     volatile bool nextTrackPending = false;
+    volatile bool resetTimerPending = false;
     
     bool isConnected();
     bool isDisconnected();
