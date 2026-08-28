@@ -1,20 +1,19 @@
 #include "web_server.h"
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 #include <Update.h>
 #include <HTTPClient.h>
 #include "storage.h"
 #include "bt_audio.h"
 #include <ArduinoJson.h>
-#include "AsyncJson.h"
-
-extern bool timerExpired;
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <SPIFFS.h>
 #include <esp_ota_ops.h>
 
+extern bool timerExpired;
+
 WebServerManager webServer;
-AsyncWebServer server(80);
+WebServer server(80);
 
 const char* html_page = R"HTML(<!DOCTYPE html>
 <html>
@@ -129,90 +128,86 @@ void WebServerManager::scheduleConnect(const String& name) {
 }
 
 void WebServerManager::begin() {
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    server.on("/", HTTP_GET, [](){
         Serial.printf("[WebServer] GET / requested from %s - Free heap: %u\n", 
-                      request->client()->remoteIP().toString().c_str(), ESP.getFreeHeap());
-        request->send(200, "text/html", html_page);
+                      server.client().remoteIP().toString().c_str(), ESP.getFreeHeap());
+        server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        server.send(200, "text/html", html_page);
     });
-    
-    server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
+
+    server.on("/api/status", HTTP_GET, [](){
         Serial.printf("[WebServer] GET /api/status\n");
         std::vector<String> devs = storage.getSavedDevices();
-        AsyncJsonResponse * response = new AsyncJsonResponse();
-        JsonVariant& root = response->getRoot();
-        JsonArray arr = root["devices"].to<JsonArray>();
+        JsonDocument doc;
+        JsonArray arr = doc["devices"].to<JsonArray>();
         for(auto& d : devs) {
             arr.add(d);
         }
-        root["timer"] = btAudio.getTimerState();
-        root["timerExpired"] = timerExpired;
-        root["pending_mac"] = BTAudio::pendingDeviceName;
-        response->setLength();
-        request->send(response);
+        doc["timer"] = btAudio.getTimerState();
+        doc["timerExpired"] = timerExpired;
+        doc["pending_mac"] = BTAudio::pendingDeviceName;
+        String json;
+        serializeJson(doc, json);
+        server.send(200, "application/json", json);
     });
-    
-    server.on("/api/connect", HTTP_GET, [](AsyncWebServerRequest *request){
-        if(request->hasParam("mac")) {
-            String mac = request->getParam("mac")->value();
+
+    server.on("/api/connect", HTTP_GET, [](){
+        if(server.hasArg("mac")) {
+            String mac = server.arg("mac");
             Serial.printf("[WebServer] GET /api/connect?mac=%s\n", mac.c_str());
-            webServer.scheduleConnect(mac); 
-            request->send(200, "text/plain", "OK");
+            webServer.scheduleConnect(mac);
+            server.send(200, "text/plain", "OK");
         } else {
-            request->send(400, "text/plain", "Missing MAC/Name");
+            server.send(400, "text/plain", "Missing MAC/Name");
         }
     });
-    
-    server.on("/api/delete", HTTP_GET, [](AsyncWebServerRequest *request){
-        if(request->hasParam("mac")) {
-            String mac = request->getParam("mac")->value();
+
+    server.on("/api/delete", HTTP_GET, [](){
+        if(server.hasArg("mac")) {
+            String mac = server.arg("mac");
             storage.removeSavedDevice(mac);
-            request->send(200, "text/plain", "OK");
+            server.send(200, "text/plain", "OK");
         } else {
-            request->send(400, "text/plain", "Missing MAC/Name");
+            server.send(400, "text/plain", "Missing MAC/Name");
         }
     });
 
-    server.on("/api/bt/scan", HTTP_GET, [](AsyncWebServerRequest *request){
+    server.on("/api/bt/scan", HTTP_GET, [](){
         btAudio.startScan();
-        request->send(200, "text/plain", "OK");
+        server.send(200, "text/plain", "OK");
     });
 
-    server.on("/api/bt/results", HTTP_GET, [](AsyncWebServerRequest *request){
+    server.on("/api/bt/results", HTTP_GET, [](){
         std::vector<String> results = btAudio.getScanResults();
-        AsyncJsonResponse * response = new AsyncJsonResponse(true); // true = array
-        JsonVariant& root = response->getRoot();
+        JsonDocument doc;
+        JsonArray root = doc.to<JsonArray>();
         for (auto& r : results) {
             root.add(r);
         }
-        response->setLength();
-        request->send(response);
+        String json;
+        serializeJson(doc, json);
+        server.send(200, "application/json", json);
     });
-    
-    server.on("/api/ota", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send(200, "text/plain", "Starting OTA...");
+
+    server.on("/api/ota", HTTP_GET, [](){
+        server.send(200, "text/plain", "Starting OTA...");
         webServer.triggerOTA();
     });
 
-    server.onNotFound([](AsyncWebServerRequest *request){
-        Serial.printf("[WebServer] HTTP %s %s requested from %s\n", 
-                      request->methodToString(), request->url().c_str(), request->client()->remoteIP().toString().c_str());
-        request->send(404, "text/plain", "Not Found");
+    server.onNotFound([](){
+        Serial.printf("[WebServer] HTTP 404 %s requested from %s\n", 
+                      server.uri().c_str(), server.client().remoteIP().toString().c_str());
+        server.send(404, "text/plain", "Not Found");
     });
 
     server.begin();
-}
-
-void WebServerManager::triggerOTA() {
-    otaRequested = true;
+    Serial.println("[WebServer] Standard Arduino WebServer started on port 80");
 }
 
 void WebServerManager::autoCheckOTA() {
-    // Current version defined in firmware
     const char* CURRENT_VERSION = "1.0.0";
-    
-    WiFiClient client; // KEIN Secure (spart >40KB RAM!)
+    WiFiClient client;
     HTTPClient http;
-    
     const char* url = "http://ota.62.herleth.de/esp32whitenoise/version.json";
     if (http.begin(client, url)) {
         int httpCode = http.GET();
@@ -220,11 +215,9 @@ void WebServerManager::autoCheckOTA() {
             String payload = http.getString();
             JsonDocument doc;
             DeserializationError error = deserializeJson(doc, payload);
-            
             if (!error) {
                 const char* remote_version = doc["version"];
                 const char* firmware_file = doc["firmware"];
-                
                 if (remote_version && firmware_file) {
                     if (String(remote_version) != String(CURRENT_VERSION)) {
                         Serial.println("New version available! Triggering OTA...");
@@ -239,7 +232,13 @@ void WebServerManager::autoCheckOTA() {
     }
 }
 
+void WebServerManager::triggerOTA() {
+    otaRequested = true;
+}
+
 void WebServerManager::loop() {
+    server.handleClient();
+
     if (pendingRestartTime > 0 && millis() >= pendingRestartTime) {
         pendingRestartTime = 0;
         Serial.printf("[WebServer] Saving target device '%s' permanently and rebooting...\n", targetDeviceName.c_str());
@@ -252,8 +251,6 @@ void WebServerManager::loop() {
     if (otaRequested) {
         otaRequested = false;
         Serial.println("OTA Update requested. Rebooting into factory partition...");
-        
-        // Find the factory partition
         const esp_partition_t* factory = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
         if (factory) {
             esp_ota_set_boot_partition(factory);
