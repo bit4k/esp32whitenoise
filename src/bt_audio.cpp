@@ -346,10 +346,12 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
                 Serial.printf("Found BT Device: %s\n", name.c_str());
             }
             
-            // Check if it's our target device
+            // Check if it's our target device (case-insensitive or substring match)
             for (const String& target : s_targetDevices) {
-                if (target == name) {
-                    Serial.printf("[BTAudio] Found target device %s! Stopping discovery to connect...\n", name.c_str());
+                if (target.equalsIgnoreCase(name) || 
+                    (name.length() > 0 && target.indexOf(name) >= 0) || 
+                    (name.length() > 0 && name.indexOf(target) >= 0)) {
+                    Serial.printf("[BTAudio] MATCHED target device '%s'! Stopping discovery to connect...\n", name.c_str());
                     memcpy(s_peer_bda, param->disc_res.bda, ESP_BD_ADDR_LEN);
                     s_has_peer_bda = true;
                     s_pending_connect = true;
@@ -398,6 +400,15 @@ void BTAudio::begin(const std::vector<String>& savedDevices) {
         s_targetDevices = {pending};
     } else {
         s_targetDevices = savedDevices;
+    }
+
+    Serial.println("[BTAudio] Initialized target devices list:");
+    if (s_targetDevices.empty()) {
+        Serial.println("  (NONE SAVED YET! Open http://white-noise.local to select your Bluetooth speaker)");
+    } else {
+        for (const String& d : s_targetDevices) {
+            Serial.printf("  - '%s'\n", d.c_str());
+        }
     }
 
     initBluetooth();
@@ -456,9 +467,21 @@ void BTAudio::initBluetooth() {
 
 void BTAudio::startScan() {
     static uint32_t lastScanStart = 0;
-    if (!s_is_discovering && (millis() - lastScanStart > 15000)) {
+    static int scanCount = 0;
+    
+    // Cooldown: after 3 scan attempts without finding target, wait 60s to prevent BT queue overflow
+    uint32_t cooldown = (scanCount >= 3) ? 60000 : 15000;
+    
+    if (!s_is_discovering && (millis() - lastScanStart > cooldown)) {
         lastScanStart = millis();
-        Serial.println("[BTAudio] Starting Bluetooth Discovery...");
+        if (scanCount >= 3) {
+            scanCount = 0;
+        }
+        scanCount++;
+        Serial.printf("[BTAudio] Starting Bluetooth Discovery (Attempt %d/3)...\n", scanCount);
+        if (s_targetDevices.empty()) {
+            Serial.println("[BTAudio] Warning: No target speaker saved! Open http://white-noise.local in browser to pick your speaker.");
+        }
         esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
     }
 }
