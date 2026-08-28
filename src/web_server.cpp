@@ -10,6 +10,7 @@
 extern bool timerExpired;
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <SPIFFS.h>
 #include <esp_ota_ops.h>
 
 WebServerManager webServer;
