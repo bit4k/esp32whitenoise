@@ -52,6 +52,7 @@ static AudioOutputRingBuf *outBuf = nullptr;
 static std::vector<ScannedDevice> s_foundDevices;
 static std::vector<String> s_targetDevices;
 static bool s_is_connecting = false;
+static uint32_t s_pending_a2dp_connect_time = 0;
 
 // Static preallocated buffers for MP3 decoder to prevent runtime heap fragmentation OOM
 static uint8_t s_madBuff[2560];
@@ -173,13 +174,15 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
     case ESP_A2D_CONNECTION_STATE_EVT: {
         s_a2d_conn_state = param->conn_stat.state;
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
-            ESP_LOGI(BT_AV_TAG, "A2DP Connected");
+            Serial.println("[BTAudio] >>> A2DP CONNECTED SUCCESSFULLY! <<<");
             s_is_connecting = false;
             memcpy(s_peer_bda, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
             s_has_peer_bda = true;
-            btAudio.isPaused = false; // Reset pause on connect
-            btAudio.mediaReadyPending = true;
+            btAudio.isPaused = false; // Default PLAY on connect
             btAudio.connectedTime = millis();
+            
+            // Start audio output immediately
+            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
             
             if (BTAudio::pendingDeviceName != "") {
                 storage.addSavedDevice(BTAudio::pendingDeviceName);
@@ -187,7 +190,7 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
                 BTAudio::pendingDeviceName = "";
             }
         } else if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
-            ESP_LOGI(BT_AV_TAG, "A2DP Disconnected");
+            Serial.println("[BTAudio] A2DP Disconnected");
             s_is_connecting = false;
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         }
@@ -196,14 +199,14 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
     case ESP_A2D_AUDIO_STATE_EVT: {
         s_a2d_audio_state = param->audio_stat.state;
         if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED) {
-            Serial.println("[BTAudio] A2DP Audio Started");
+            Serial.println("[BTAudio] 🔊 A2DP Audio Streaming Started (White Noise Playing)");
         }
         break;
     }
     case ESP_A2D_MEDIA_CTRL_ACK_EVT: {
         if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY &&
             param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
-            Serial.println("[BTAudio] Media ready, starting...");
+            Serial.println("[BTAudio] Media ready, starting stream...");
             esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
         }
         break;
@@ -222,9 +225,7 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         if (param->conn_stat.connected == 1 && s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
             memcpy(s_peer_bda, bda, ESP_BD_ADDR_LEN);
             s_has_peer_bda = true;
-            s_is_connecting = true;
-            Serial.println("[BTAudio] AVRCP connected! Connecting matching A2DP audio channel...");
-            esp_a2d_source_connect(s_peer_bda);
+            s_pending_a2dp_connect_time = millis() + 400; // Defer 400ms for ACL link stabilization
         }
         break;
     }
@@ -684,6 +685,15 @@ void BTAudio::loop() {
         delete mp3; mp3 = nullptr;
         delete fileSource; fileSource = nullptr;
         portEXIT_CRITICAL(&audioMux);
+    }
+    
+    if (s_pending_a2dp_connect_time > 0 && millis() >= s_pending_a2dp_connect_time) {
+        s_pending_a2dp_connect_time = 0;
+        if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
+            s_is_connecting = true;
+            Serial.println("[BTAudio] AVRCP link settled. Initiating A2DP audio connection now...");
+            esp_a2d_source_connect(s_peer_bda);
+        }
     }
     
     if (mediaReadyPending && (millis() - connectedTime > 1500)) {
