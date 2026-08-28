@@ -158,7 +158,9 @@ void WebServerManager::scheduleConnect(const String& name) {
 void WebServerManager::begin() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         Serial.printf("[WebServer] GET / - Free heap: %u, Max block: %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-        request->send(200, "text/html", html_page);
+        AsyncWebServerResponse *response = request->beginResponse(200, "text/html", html_page);
+        response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        request->send(response);
     });
     
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
