@@ -488,7 +488,7 @@ void BTAudio::initBluetooth() {
     
     // A2DP Setup
     esp_a2d_register_callback(bt_app_av_sm_hdlr);
-    esp_a2d_source_register_data_callback(audio_data_callback);
+    esp_a2d_source_register_data_callback(bt_app_a2d_data_cb);
     esp_a2d_source_init();
     
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
