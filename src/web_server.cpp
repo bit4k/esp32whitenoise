@@ -38,12 +38,18 @@ const char* html_page = R"HTML(<!DOCTYPE html>
         <h3>Saved Speakers:</h3>
         <div id="savedDevicesList">Loading...</div>
         <hr style="border:1px solid #444; margin:15px 0;">
-        <button onclick="scanBT()">Scan for Speakers</button>
-        <div id="scanResults" style="margin:10px 0; max-height:150px; overflow-y:auto; text-align:left; background:#2c2c2c; border-radius:5px; padding:5px;"></div>
-        <br>
-        <input type="text" id="mac" placeholder="Speaker Name or MAC">
-        <br>
-        <button onclick="saveMac()">Connect</button>
+        
+        <button onclick="scanBT()" style="width:100%; font-size:16px; padding:12px; background:#bb86fc; color:#000; font-weight:bold;">🔍 Scan for Nearby Speakers</button>
+        <div id="scanResults" style="margin-top:12px; text-align:left;"></div>
+        
+        <details style="margin-top:20px; color:#aaa; font-size:13px; text-align:left;">
+            <summary style="cursor:pointer; padding:5px; background:#252525; border-radius:4px;">⚙️ Manual Speaker Entry</summary>
+            <div style="padding:10px 0; text-align:center;">
+                <input type="text" id="mac" placeholder="Speaker Name or MAC">
+                <br>
+                <button onclick="saveMac()">Connect Manually</button>
+            </div>
+        </details>
     </div>
     <div class="card">
         <h2>System</h2>
@@ -56,9 +62,9 @@ const char* html_page = R"HTML(<!DOCTYPE html>
                 if (d.devices && d.devices.length > 0) {
                     for (var i = 0; i < d.devices.length; i++) {
                         var name = d.devices[i];
-                        html += '<div style="display:flex; justify-content:space-between; background:#2c2c2c; padding:8px; margin-bottom:5px; border-radius:5px; align-items:center;">' +
-                            '<span>' + name + '</span>' +
-                            '<button class="danger" onclick="deleteMac(\'' + name + '\')">Delete</button>' +
+                        html += '<div style="display:flex; justify-content:space-between; background:#2c2c2c; padding:8px 12px; margin-bottom:6px; border-radius:6px; align-items:center;">' +
+                            '<span style="font-weight:bold; font-size:15px;">🔊 ' + name + '</span>' +
+                            '<button class="danger" style="padding:4px 10px; margin:0;" onclick="deleteMac(\'' + name + '\')">Delete</button>' +
                         '</div>';
                     }
                 } else {
@@ -94,17 +100,17 @@ const char* html_page = R"HTML(<!DOCTYPE html>
         }
         function scanBT() {
             var resDiv = document.getElementById('scanResults');
-            resDiv.innerHTML = "<div style='padding:10px;text-align:center;'>Scanning...</div>";
+            resDiv.innerHTML = "<div style='padding:12px;text-align:center;color:#bb86fc;font-weight:bold;'>🔍 Scanning nearby Bluetooth devices...</div>";
             fetch('/api/bt/results').then(function(r){return r.json();}).then(function(d){
                 var html = "";
                 if (!d || d.length === 0) {
-                    html = "<div style='padding:10px;text-align:center;color:#aaa;'>No devices found nearby.<br><small>(Ensure speaker is in pairing mode)</small></div>";
+                    html = "<div style='padding:12px;text-align:center;color:#aaa;background:#2c2c2c;border-radius:6px;'>No devices found nearby.<br><small>(Ensure speaker is in active pairing mode)</small></div>";
                 } else {
                     for (var i = 0; i < d.length; i++) {
                         var name = d[i];
-                        html += "<div style='padding:5px; border-bottom:1px solid #444;'>" +
-                            "<button style='width:100%; text-align:left; background:transparent; color:#bb86fc; font-size:15px;' onclick='connectMac(\"" + name + "\")'>" +
-                                "Connect: " + name +
+                        html += "<div style='margin-bottom:6px;'>" +
+                            "<button style='width:100%; text-align:left; background:#2c2c2c; color:#bb86fc; border:1px solid #444; border-radius:6px; font-size:15px; font-weight:bold; padding:10px 14px; cursor:pointer;' onclick='connectMac(\"" + name + "\")'>" +
+                                "🔗 Connect to " + name +
                             "</button>" +
                         "</div>";
                     }
