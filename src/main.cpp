@@ -99,6 +99,22 @@ void startConfigServer() {
     }
 }
 
+const char* getResetReasonStr() {
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:   return "Power-On (Kaltstart)";
+        case ESP_RST_EXT:       return "External Pin (EN/RST Taste)";
+        case ESP_RST_SW:        return "Software Reset (esp_restart)";
+        case ESP_RST_PANIC:     return "Exception / Panic Abort";
+        case ESP_RST_INT_WDT:   return "Interrupt Watchdog";
+        case ESP_RST_TASK_WDT:  return "Task Watchdog";
+        case ESP_RST_WDT:       return "Other Watchdog";
+        case ESP_RST_DEEPSLEEP: return "Deep Sleep Wakeup";
+        case ESP_RST_BROWNOUT:  return "Brownout (Spannungseinbruch)";
+        case ESP_RST_SDIO:      return "SDIO Reset";
+        default:                return "Unbekannt";
+    }
+}
+
 // Timer and Disconnect logic
 bool timerExpired = false;
 uint32_t expireTime = 0;
@@ -107,6 +123,7 @@ uint32_t disconnectTime = 0;
 
 void setup() {
     Serial.begin(115200);
+    Serial.printf("\n[Boot] Letzter Reset-Grund: %s\n", getResetReasonStr());
     
     // Init LED (Active LOW -> HIGH is OFF)
     pinMode(LED_PIN, OUTPUT);

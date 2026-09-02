@@ -780,6 +780,12 @@ void BTAudio::loop() {
     static uint32_t lastStatusPrint = 0;
     if (millis() - lastStatusPrint >= 10000) {
         lastStatusPrint = millis();
+        
+        uint32_t upSec = millis() / 1000;
+        uint32_t upH = upSec / 3600;
+        uint32_t upM = (upSec % 3600) / 60;
+        uint32_t upS = upSec % 60;
+
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
             esp_bt_gap_read_rssi_delta(s_peer_bda);
             
@@ -793,13 +799,18 @@ void BTAudio::loop() {
                 timerStr = timerBuf;
             }
             
-            ESP_LOGI(BT_AV_TAG, "[Status] 🔊 %s | Pegel: %d%% (%d/127) | RSSI-Delta: %d dB | %s | Timer: %s | Heap: %u KB",
+            ESP_LOGI(BT_AV_TAG, "[Status] ⏱️ Uptime: %02u:%02u:%02u | 🔊 %s | Pegel: %d%% (%d/127) | RSSI-Delta: %d dB | %s | Timer: %s | Heap: %u KB",
+                     (unsigned int)upH, (unsigned int)upM, (unsigned int)upS,
                      isPaused ? "PAUSE" : "PLAYING",
                      (int)((s_current_volume * 100) / 127),
                      s_current_volume,
                      s_current_rssi_delta,
                      noiseGen.getTypeName(noiseGen.getType()),
                      timerStr,
+                     (unsigned int)(ESP.getFreeHeap() / 1024));
+        } else {
+            ESP_LOGI(BT_AV_TAG, "[Status] ⏱️ Uptime: %02u:%02u:%02u | ⚪ GETRENNT (Warte auf Lautsprecher...) | Heap: %u KB",
+                     (unsigned int)upH, (unsigned int)upM, (unsigned int)upS,
                      (unsigned int)(ESP.getFreeHeap() / 1024));
         }
     }
