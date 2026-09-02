@@ -776,9 +776,9 @@ void BTAudio::loop() {
         }
     }
 
-    // Regelmäßige Status- und Pegelausgabe alle 10 Sekunden
+    // Regelmäßige Status- und Pegelausgabe jede Minute (60 Sekunden)
     static uint32_t lastStatusPrint = 0;
-    if (millis() - lastStatusPrint >= 10000) {
+    if (millis() - lastStatusPrint >= 60000) {
         lastStatusPrint = millis();
         
         uint32_t upSec = millis() / 1000;
