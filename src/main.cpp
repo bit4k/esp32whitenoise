@@ -8,16 +8,33 @@
 #include "web_server.h"
 #include <Ticker.h>
 #include <esp_gap_bt_api.h>
+#include <esp_wifi.h>
+#include <esp_coexist.h>
+#include <nvs_flash.h>
+#include <nvs.h>
 
 WiFiManager wm;
-const int LED_PIN = 5; // Wemos LOLIN32 / ESP32 LED Pin
+const int LED_PIN = 5;       // Wemos LOLIN32 / ESP32 LED Pin
+const int BOOT_BTN_PIN = 0;  // Non-reset button (ESP32 BOOT button / GPIO 0)
+
+static bool configModeActive = false;
 
 void handleLED() {
     static uint32_t lastCycle = 0;
     static bool ledActive = false;
     uint32_t now = millis();
-    bool isConn = btAudio.isConnected();
 
+    if (configModeActive) {
+        // Config Mode (Web Server active): Fast 150ms blink so user knows setup portal is running
+        if (now - lastCycle >= 150) {
+            lastCycle = now;
+            ledActive = !ledActive;
+            digitalWrite(LED_PIN, ledActive ? LOW : HIGH);
+        }
+        return;
+    }
+
+    bool isConn = btAudio.isConnected();
     if (isConn) {
         // Bluetooth Connected: Ultra-short 15ms flash once every 3 seconds (active LOW)
         if (!ledActive && (now - lastCycle >= 3000)) {
@@ -29,9 +46,56 @@ void handleLED() {
             digitalWrite(LED_PIN, HIGH); // OFF
         }
     } else {
-        // Disconnected / No Bluetooth: LED ALWAYS OFF (Active LOW -> HIGH is OFF)
+        // Disconnected / Normal: LED ALWAYS OFF (Active LOW -> HIGH is OFF)
         ledActive = false;
         digitalWrite(LED_PIN, HIGH);
+    }
+}
+
+// Function to start WiFi and Web Server on demand
+void startConfigServer() {
+    if (configModeActive) return;
+    configModeActive = true;
+    
+    Serial.println("\n============================================");
+    Serial.println("[ConfigMode] Starting WiFi & Web Configuration Portal...");
+    Serial.println("============================================\n");
+    
+    WiFi.setHostname("white-noise");
+    
+    wm.setAPCallback([](WiFiManager *myWiFiManager) {
+        Serial.println("\n============================================");
+        Serial.println("[WiFiManager] SoftAP Config Portal Started!");
+        Serial.printf("[WiFiManager] AP SSID: %s\n", myWiFiManager->getConfigPortalSSID().c_str());
+        Serial.printf("[WiFiManager] AP IP Address: %s\n", WiFi.softAPIP().toString().c_str());
+        Serial.println("============================================\n");
+    });
+    
+    wm.setConfigPortalTimeout(180);
+    wm.setConnectTimeout(10);
+    
+    bool res = wm.autoConnect("ESP32_WhiteNoise_Setup");
+    if (res) {
+        Serial.println("\n============================================");
+        Serial.println("[WiFi] Connected to WiFi!");
+        Serial.printf("[WiFi] STA IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.println("============================================\n");
+        
+        wm.stopWebPortal();
+        wm.stopConfigPortal();
+        WiFi.mode(WIFI_STA);
+        WiFi.setTxPower(WIFI_POWER_5dBm);
+        WiFi.setSleep(WIFI_PS_MAX_MODEM);
+        
+        webServer.begin();
+        
+        if (MDNS.begin("white-noise")) {
+            Serial.println("[mDNS] Responder started: http://white-noise.local");
+        }
+        Serial.printf("[ConfigMode] Web interface ready: http://%s or http://white-noise.local\n",
+                      WiFi.localIP().toString().c_str());
+    } else {
+        Serial.println("[ConfigMode] WiFi connection timed out or closed.");
     }
 }
 
@@ -48,12 +112,33 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
     
+    // Init BOOT Button (GPIO 0, active LOW with internal pullup)
+    pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
+    
     // Init Storage
     storage.begin();
-    esp_log_level_set("BT_AV", ESP_LOG_WARN);
-    esp_log_level_set("BT_APP", ESP_LOG_WARN);
-
     
+    // Clean any corrupted Bluedroid NVS cache from previous abrupt aborts to prevent boot loops
+    nvs_handle_t bt_cfg;
+    if (nvs_open("bt_config.conf", NVS_READWRITE, &bt_cfg) == ESP_OK) {
+        nvs_erase_all(bt_cfg);
+        nvs_commit(bt_cfg);
+        nvs_close(bt_cfg);
+        Serial.println("[BTAudio] Cleared Bluedroid NVS cache to prevent corruption boot loops.");
+    }
+    
+    // Set ESP-IDF Log Levels (Bluetooth on DEBUG)
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set("BT_AV", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_APP", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_BTC", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_BTM", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_GAP", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_A2D", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_AVRC", ESP_LOG_DEBUG);
+    esp_log_level_set("BTAudio", ESP_LOG_DEBUG);
+    esp_log_level_set("NoiseGen", ESP_LOG_DEBUG);
+
     std::vector<String> devs = storage.getSavedDevices();
     
     // Init SPIFFS
@@ -66,48 +151,45 @@ void setup() {
     int type = storage.getLastNoiseType();
     noiseGen.setType(type);
     
-    // Init WiFiManager
-    // wm.resetSettings(); // for debugging
-    WiFi.setHostname("white-noise");
+    // Check if BOOT button is held on startup OR if no speaker is configured yet
+    bool btnHeld = (digitalRead(BOOT_BTN_PIN) == LOW);
+    bool hasSavedSpeaker = (!devs.empty() && devs[0].length() > 0);
     
-    // Register AP Callback to print SoftAP IP & details when setup portal starts
-    wm.setAPCallback([](WiFiManager *myWiFiManager) {
-        Serial.println("\n============================================");
-        Serial.println("[WiFiManager] SoftAP Config Portal Started!");
-        Serial.printf("[WiFiManager] AP SSID: %s\n", myWiFiManager->getConfigPortalSSID().c_str());
-        Serial.printf("[WiFiManager] AP IP Address: %s\n", WiFi.softAPIP().toString().c_str());
-        Serial.println("============================================\n");
-    });
-    
-    bool res = wm.autoConnect("ESP32_WhiteNoise_Setup");
-    if(!res) {
-        Serial.println("\n[WiFiManager] Failed to connect or timeout reached.");
-    } else {
-        Serial.println("\n============================================");
-        Serial.println("[WiFi] Connected to WiFi!");
-        Serial.printf("[WiFi] STA IP Address: %s\n", WiFi.localIP().toString().c_str());
-        Serial.println("============================================\n");
-        
-        // Stop WiFiManager server so Port 80 is freed for AsyncWebServer
-        wm.stopWebPortal();
-        wm.stopConfigPortal();
-        
-        // Start Web Server
-        webServer.begin();
-        
-        // Start mDNS
-        if (MDNS.begin("white-noise")) {
-            Serial.println("[mDNS] Responder started: http://white-noise.local");
+    if (btnHeld || !hasSavedSpeaker) {
+        if (btnHeld) {
+            Serial.println("[Boot] BOOT button held -> Entering Web Configuration Mode!");
+        } else {
+            Serial.println("[Boot] No speaker configured yet -> Entering Web Configuration Mode!");
         }
+        startConfigServer();
+    } else {
+        Serial.println("[Boot] Fast Audio Mode: WiFi OFF. Zero radio interference, instant Bluetooth audio!");
+        WiFi.mode(WIFI_OFF);
     }
     
-    // Init BT Audio LAST to ensure WiFi/OTA/Webserver have enough memory to initialize
+    // Initialize Bluetooth Audio IMMEDIATELY!
     btAudio.begin(devs);
+    esp_coex_preference_set(ESP_COEX_PREFER_BT);
 }
 
 void loop() {
+    // Check if user presses the BOOT button for >1s during runtime to open the config portal
+    static uint32_t btnPressStart = 0;
+    if (digitalRead(BOOT_BTN_PIN) == LOW) {
+        if (btnPressStart == 0) {
+            btnPressStart = millis();
+        } else if (millis() - btnPressStart > 1000 && !configModeActive) {
+            Serial.println("\n[Button] BOOT button pressed for 1s -> Launching Web Configuration Portal!");
+            startConfigServer();
+        }
+    } else {
+        btnPressStart = 0;
+    }
+
     // Process async tasks
-    webServer.loop();
+    if (configModeActive) {
+        webServer.loop();
+    }
     btAudio.loop();
     handleLED();
     
@@ -188,17 +270,11 @@ void loop() {
     }
 
     // Background Reconnection Loop
-    // If we are fully disconnected and not in the cool-down period, we ensure the ESP32 is connectable
-    // and periodically try to page the speaker.
+    // If we are fully disconnected and not in the cool-down period, periodically attempt reconnection.
     if (btAudio.isDisconnected() && !reconnectPending) {
         static uint32_t lastReconnectTry = 0;
-        if (millis() - lastReconnectTry > 15000) {
+        if (millis() - lastReconnectTry > 1000) {
             lastReconnectTry = millis();
-            
-            // 1. Force the ESP32 to be connectable and discoverable
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-            
-            // 2. Actively try to page the speaker
             btAudio.reconnect();
         }
     }

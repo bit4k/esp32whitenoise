@@ -52,6 +52,7 @@ public:
     bool isConnected();
     bool isDisconnected();
     bool isAnnouncementPlaying();
+    bool isStreaming();
     
     // Scanning methods
     void startScan();

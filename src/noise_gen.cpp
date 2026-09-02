@@ -42,20 +42,26 @@ const char* NoiseGenerator::getTypeName(int typeIndex) {
     return "Unknown";
 }
 
-static uint32_t fast_rand_seed = 123456789;
-inline uint32_t fast_rand() {
-    fast_rand_seed = fast_rand_seed * 1664525 + 1013904223;
-    return fast_rand_seed;
+// 64-bit XorShift* PRNG: Period is 2^64 - 1 (~1.84 x 10^19 samples)
+// At 44.1 kHz, this will not repeat for over 13 million years!
+// Eliminates the 65,536-sample (1.48s / ~2Hz) cyclical repetition of the old LCG generator.
+static uint64_t s_rng_state = 0x853c49e6748fea9bULL;
+
+static inline uint32_t xorshift64star() {
+    s_rng_state ^= s_rng_state >> 12;
+    s_rng_state ^= s_rng_state << 25;
+    s_rng_state ^= s_rng_state >> 27;
+    return (uint32_t)((s_rng_state * 0x2545F4914F6CDD1DULL) >> 32);
 }
 
 int16_t NoiseGenerator::generateWhite() {
-    // Generate random number between -32768 and 32767
-    return (int16_t)(fast_rand() % 65536 - 32768);
+    // Use upper 16 bits of 64-bit XorShift* for maximum entropy and zero low-bit correlation
+    return (int16_t)(xorshift64star() >> 16);
 }
 
 int16_t NoiseGenerator::generatePink() {
-    // Voss-McCartney algorithm approximation or Paul Kellett's method
-    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
+    // Voss-McCartney algorithm approximation / Paul Kellett's method
+    float white = ((float)(int16_t)(xorshift64star() >> 16)) / 32768.0f;
     pink_b0 = 0.99886f * pink_b0 + white * 0.0555179f;
     pink_b1 = 0.99332f * pink_b1 + white * 0.0750759f;
     pink_b2 = 0.96900f * pink_b2 + white * 0.1538520f;
@@ -73,7 +79,7 @@ int16_t NoiseGenerator::generatePink() {
 }
 
 int16_t NoiseGenerator::generateBrown() {
-    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
+    float white = ((float)(int16_t)(xorshift64star() >> 16)) / 32768.0f;
     brown_out = (brown_out + (0.02f * white)) / 1.02f;
     float out = brown_out * 3.5f; // Gain adjust
     
@@ -84,7 +90,7 @@ int16_t NoiseGenerator::generateBrown() {
 }
 
 int16_t NoiseGenerator::generateBlue() {
-    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
+    float white = ((float)(int16_t)(xorshift64star() >> 16)) / 32768.0f;
     float out = white - blue_last;
     blue_last = white;
     
@@ -95,8 +101,7 @@ int16_t NoiseGenerator::generateBlue() {
 }
 
 int16_t NoiseGenerator::generateViolet() {
-    // Differentiation of blue noise or simple highpass
-    float white = ((float)(fast_rand() % 65536) - 32768.0f) / 32768.0f;
+    float white = ((float)(int16_t)(xorshift64star() >> 16)) / 32768.0f;
     float blue = white - blue_last;
     blue_last = white;
     static float violet_last = 0;
@@ -110,38 +115,42 @@ int16_t NoiseGenerator::generateViolet() {
 }
 
 void NoiseGenerator::getFrames(Frame* frames, int32_t frameCount) {
-    // 44100 Hz sample rate assumed
     float dt = 1.0f / 44100.0f;
     
     for (int32_t i = 0; i < frameCount; i++) {
-        int16_t sample = 0;
+        int16_t sampleL = 0;
+        int16_t sampleR = 0;
         
-        switch (currentType) {
-            case 0: sample = generateWhite(); break;
-            case 1: sample = generatePink(); break;
-            case 2: sample = generateBrown(); break;
-            case 3: sample = generateBlue(); break;
-            case 4: sample = generateViolet(); break;
+        if (currentType == 0) {
+            // Pure White Noise: Independent random samples for Left & Right (wide, organic spatial sound)
+            sampleL = generateWhite();
+            sampleR = generateWhite();
+        } else {
+            switch (currentType) {
+                case 1: sampleL = generatePink(); break;
+                case 2: sampleL = generateBrown(); break;
+                case 3: sampleL = generateBlue(); break;
+                case 4: sampleL = generateViolet(); break;
+                
+                case 5: lfo_freq = 0.2f; sampleL = generateWhite(); break; // Ocean Waves
+                case 6: lfo_freq = 0.2f; sampleL = generatePink(); break;  // Pink Ocean
+                case 7: lfo_freq = 0.2f; sampleL = generateBrown(); break; // Deep Ocean
+                case 8: lfo_freq = 0.1f; sampleL = generatePink(); break;  // Breathing Pink
+                case 9: lfo_freq = 1.0f; sampleL = generatePink(); break;  // Fast Mod Pink
+            }
             
-            case 5: lfo_freq = 0.2f; sample = generateWhite(); break; // Ocean Waves
-            case 6: lfo_freq = 0.2f; sample = generatePink(); break;  // Pink Ocean
-            case 7: lfo_freq = 0.2f; sample = generateBrown(); break; // Deep Ocean
-            case 8: lfo_freq = 0.1f; sample = generatePink(); break;  // Breathing Pink
-            case 9: lfo_freq = 1.0f; sample = generatePink(); break;  // Fast Mod Pink
+            if (currentType >= 5) {
+                lfo_phase += lfo_freq * dt;
+                if (lfo_phase > 1.0f) lfo_phase -= 1.0f;
+                
+                // LFO shape: Sine wave mapped to 0.2 .. 1.0
+                float mod = 0.6f + 0.4f * sinf(lfo_phase * 2.0f * (float)M_PI);
+                sampleL = (int16_t)((float)sampleL * mod);
+            }
+            sampleR = sampleL;
         }
         
-        // Apply modulation for types >= 5
-        if (currentType >= 5) {
-            lfo_phase += lfo_freq * dt;
-            if (lfo_phase > 1.0f) lfo_phase -= 1.0f;
-            
-            // LFO shape: Sine wave mapped to 0.2 .. 1.0
-            float mod = 0.6f + 0.4f * sinf(lfo_phase * 2.0f * (float)M_PI);
-            sample = (int16_t)((float)sample * mod);
-        }
-        
-        // Stereo
-        frames[i].channel1 = sample;
-        frames[i].channel2 = sample;
+        frames[i].channel1 = sampleL;
+        frames[i].channel2 = sampleR;
     }
 }

@@ -8,4 +8,5 @@ echo "============================================"
 
 # pio run: Schritt 1 = Dateisystem (MP3s), Schritt 2 = Firmware + Serial Monitor
 pio run -e app -t uploadfs
+sleep 2
 pio run -e app -t upload -t monitor

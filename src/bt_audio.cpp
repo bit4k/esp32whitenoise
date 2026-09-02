@@ -1,5 +1,6 @@
 #include "bt_audio.h"
 #include "noise_gen.h"
+#include <WiFi.h>
 #include "storage.h"
 #include <SPIFFS.h>
 #include <AudioFileSourceSPIFFS.h>
@@ -40,8 +41,10 @@ public:
         int16_t s[2];
         s[0] = Amplify(sample[0]);
         s[1] = Amplify(sample[1]);
-        xRingbufferSend(rb, s, 4, pdMS_TO_TICKS(10));
-        return true;
+        // Return true ONLY if sample was accepted into ringbuffer!
+        // Returning false when full is required by ESP8266Audio to pause decoding at real-time rate.
+        BaseType_t res = xRingbufferSend(rb, s, 4, 0);
+        return (res == pdTRUE);
     }
     virtual bool stop() override { return true; }
 };
@@ -53,12 +56,14 @@ static std::vector<ScannedDevice> s_foundDevices;
 static std::vector<String> s_targetDevices;
 static bool s_is_connecting = false;
 static uint32_t s_pending_a2dp_connect_time = 0;
+static uint32_t s_last_disconnect_time = 0;
+static bool s_media_ctrl_in_flight = false;
+static int s_consecutive_fails = 0;
+static uint8_t s_current_volume = 100;
+static int8_t s_current_rssi_delta = 0;
 
-// Static preallocated buffers for MP3 decoder to prevent runtime heap fragmentation OOM
-static uint8_t s_madBuff[2560];
-static uint8_t s_madStreamBuf[128];
-static uint8_t s_madFrameBuf[2568];
-static uint8_t s_madSynthBuf[16600];
+// Static preallocated buffer for MP3 decoder using exact library size requirement
+static uint8_t s_mp3PreAlloc[AudioGeneratorMP3::preAllocSize()];
 
 String BTAudio::pendingDeviceName = "";
 
@@ -91,32 +96,28 @@ static int32_t bt_app_a2d_data_cb(uint8_t *data, int32_t len) {
         return len;
     }
     
-    bool playingAnnouncement = btAudio.isAnnouncementPlaying();
-    
-    if (playingAnnouncement && outBuf && outBuf->rb) {
+    // 1. Check if there are MP3 announcement samples in the ringbuffer
+    if (outBuf && outBuf->rb) {
         size_t bytes_received = 0;
         uint8_t *rb_data = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &bytes_received, 0, len);
         if (rb_data && bytes_received > 0) {
             memcpy(data, rb_data, bytes_received);
             vRingbufferReturnItem(outBuf->rb, rb_data);
-            if (bytes_received < len) {
-                memset(data + bytes_received, 0, len - bytes_received);
+            if (bytes_received < (size_t)len) {
+                // If MP3 ended mid-packet, fill remaining with noise
+                noiseGen.getFrames((NoiseGenerator::Frame*)(data + bytes_received), (len - bytes_received) / 4);
             }
-            return len;
-        } else {
-            memset(data, 0, len);
             return len;
         }
     }
     
-    // Pure White Noise Generation (Zero locks, ultra-fast, 100% continuous and silk smooth!)
+    // 2. Pure White Noise Generation
     noiseGen.getFrames((NoiseGenerator::Frame*)data, len / 4);
     
-    // Apply Volume Fade & Overlay Warning Beep if playing normal audio/noise
-    if (!playingAnnouncement) {
-        float currentFade = btAudio.getFadeFactor();
-        int16_t *samples = (int16_t *)data;
-        int32_t num_frames = len / 4; // 4 bytes per stereo frame
+    // Apply Volume Fade & Overlay Warning Beep if active
+    float currentFade = btAudio.getFadeFactor();
+    int16_t *samples = (int16_t *)data;
+    int32_t num_frames = len / 4; // 4 bytes per stereo frame
         
         for (int32_t i = 0; i < num_frames; i++) {
             int16_t left = samples[i * 2];
@@ -157,7 +158,6 @@ static int32_t bt_app_a2d_data_cb(uint8_t *data, int32_t len) {
             samples[i * 2] = left;
             samples[i * 2 + 1] = right;
         }
-    }
     return len;
 }
 
@@ -166,24 +166,36 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
     case ESP_A2D_CONNECTION_STATE_EVT: {
         s_a2d_conn_state = param->conn_stat.state;
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
-            Serial.println("[BTAudio] >>> A2DP CONNECTED SUCCESSFULLY! <<<");
+            ESP_LOGI(BT_AV_TAG, ">>> A2DP CONNECTED SUCCESSFULLY! <<<");
             s_is_connecting = false;
+            s_consecutive_fails = 0;
             memcpy(s_peer_bda, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
             s_has_peer_bda = true;
             btAudio.isPaused = false; // Default PLAY on connect
             btAudio.connectedTime = millis();
             
-            // Start audio output immediately
-            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
+            // Critical for Coexistence: Disable BT discoverability while streaming.
+            esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+            
+            // Ensure volume is at 100% and not muted
+            btAudio.setFadeFactor(1.0f);
+            
+            // Fast Start: Check if media source channel is ready
+            ESP_LOGD(BT_AV_TAG, "Triggering media ready check on connect...");
+            s_media_ctrl_in_flight = true;
+            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
             
             if (BTAudio::pendingDeviceName != "") {
                 storage.addSavedDevice(BTAudio::pendingDeviceName);
-                Serial.printf("[BTAudio] Successfully connected to %s. Saved!\n", BTAudio::pendingDeviceName.c_str());
+                ESP_LOGI(BT_AV_TAG, "Successfully connected to %s. Saved!", BTAudio::pendingDeviceName.c_str());
                 BTAudio::pendingDeviceName = "";
             }
         } else if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
-            Serial.println("[BTAudio] A2DP Disconnected");
+            ESP_LOGW(BT_AV_TAG, "A2DP Disconnected (Reason: %d, Free Heap: %u)",
+                     param->conn_stat.disc_rsn, (unsigned int)ESP.getFreeHeap());
             s_is_connecting = false;
+            s_media_ctrl_in_flight = false;
+            s_last_disconnect_time = millis();
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         }
         break;
@@ -191,15 +203,27 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
     case ESP_A2D_AUDIO_STATE_EVT: {
         s_a2d_audio_state = param->audio_stat.state;
         if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED) {
-            Serial.println("[BTAudio] 🔊 A2DP Audio Streaming Started (White Noise Playing)");
+            ESP_LOGI(BT_AV_TAG, "🔊 A2DP Audio Streaming Started (White Noise Playing)");
+        } else if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STOPPED) {
+            ESP_LOGD(BT_AV_TAG, "A2DP Audio Streaming Stopped");
+        } else if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND) {
+            ESP_LOGD(BT_AV_TAG, "A2DP Audio Streaming Suspended (Remote)");
         }
         break;
     }
     case ESP_A2D_MEDIA_CTRL_ACK_EVT: {
-        if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY &&
-            param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
-            Serial.println("[BTAudio] Media ready, starting stream...");
-            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
+        s_media_ctrl_in_flight = false;
+        ESP_LOGD(BT_AV_TAG, "A2DP media ctrl ack: cmd %d, status %d", param->media_ctrl_stat.cmd, param->media_ctrl_stat.status);
+        if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY) {
+            if (param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
+                ESP_LOGI(BT_AV_TAG, "Media ready -> Triggering A2DP stream START...");
+                s_media_ctrl_in_flight = true;
+                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
+            }
+        } else if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_START) {
+            if (param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
+                ESP_LOGI(BT_AV_TAG, "A2DP stream start acknowledged by peer!");
+            }
         }
         break;
     }
@@ -212,12 +236,13 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
     switch (event) {
     case ESP_AVRC_TG_CONNECTION_STATE_EVT: {
         uint8_t *bda = param->conn_stat.remote_bda;
-        Serial.printf("[BTAudio] AVRC TG conn_state evt: state %d, [%02x:%02x:%02x:%02x:%02x:%02x]\n",
+        ESP_LOGI(BT_AV_TAG, "AVRC TG conn_state evt: state %d, [%02x:%02x:%02x:%02x:%02x:%02x]",
                  param->conn_stat.connected, bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
         if (param->conn_stat.connected == 1 && s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
             memcpy(s_peer_bda, bda, ESP_BD_ADDR_LEN);
             s_has_peer_bda = true;
-            s_pending_a2dp_connect_time = millis() + 400; // Defer 400ms for ACL link stabilization
+            // Initiate A2DP quickly after AVRCP (400ms delay to allow link settling without long wait)
+            s_pending_a2dp_connect_time = millis() + 400;
         }
         break;
     }
@@ -236,39 +261,50 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         break;
     }
     case ESP_AVRC_TG_SET_ABSOLUTE_VOLUME_CMD_EVT: {
-        Serial.printf("[BTAudio] AVRCP TG Set Absolute Volume: %d\n", param->set_abs_vol.volume);
+        static uint8_t last_vol = 0;
+        uint8_t current_vol = param->set_abs_vol.volume;
+        s_current_volume = current_vol;
+        ESP_LOGI(BT_AV_TAG, "AVRCP TG Lautstärke: %d/127 (%.0f%%)", current_vol, (current_vol * 100.0f) / 127.0f);
         btAudio.resetTimerPending = true;
+        
+        // Auto-Play if volume is increased while paused
+        if (btAudio.isPaused && current_vol > last_vol) {
+            ESP_LOGI(BT_AV_TAG, "Lautstärke erhöht -> Auto Play!");
+            btAudio.isPaused = false;
+        }
+        last_vol = current_vol;
         break;
     }
     case ESP_AVRC_TG_PASSTHROUGH_CMD_EVT: {
         if (param->psth_cmd.key_state == 0) { // Pressed
-            Serial.printf("[BTAudio] AVRCP PT_CMD %d\n", param->psth_cmd.key_code);
+            ESP_LOGI(BT_AV_TAG, "AVRCP PT_CMD: %d", param->psth_cmd.key_code);
             if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PLAY) {
                 btAudio.isPaused = false;
-                if (s_a2d_audio_state != ESP_A2D_AUDIO_STATE_STARTED) {
-                    esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
-                }
-                Serial.println("[BTAudio] -> Action: Play");
+                ESP_LOGI(BT_AV_TAG, "-> Action: Play (Unmuted)");
                 // Software double-click fallback
                 if (millis() - btAudio.lastPauseTime < 1000) {
-                    Serial.println("[BTAudio] -> Software Double-Click Detected!");
+                    ESP_LOGI(BT_AV_TAG, "-> Software Double-Click Detected!");
                     btAudio.toggleTimerPending = true;
                 }
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_PAUSE) {
                 btAudio.isPaused = true;
-                if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED) {
-                    esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_SUSPEND);
-                }
                 btAudio.lastPauseTime = millis();
-                Serial.println("[BTAudio] -> Action: Pause");
+                ESP_LOGI(BT_AV_TAG, "-> Action: Pause (Muted)");
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_FORWARD) {
-                Serial.println("[BTAudio] -> Action: Forward (Hardware Double-Click!)");
+                ESP_LOGI(BT_AV_TAG, "-> Action: Forward (Hardware Double-Click!)");
                 btAudio.toggleTimerPending = true;
             } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_BACKWARD) {
-                Serial.println("[BTAudio] -> Action: Backward (Hardware Triple-Click!)");
+                ESP_LOGI(BT_AV_TAG, "-> Action: Backward (Hardware Triple-Click!)");
                 btAudio.nextTrackPending = true;
-            } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_VOL_UP || param->psth_cmd.key_code == ESP_AVRC_PT_CMD_VOL_DOWN) {
-                Serial.println("[BTAudio] -> Volume Button Pressed on Speaker!");
+            } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_VOL_UP) {
+                ESP_LOGI(BT_AV_TAG, "-> Volume UP Button Pressed on Speaker!");
+                btAudio.resetTimerPending = true;
+                if (btAudio.isPaused) {
+                    ESP_LOGI(BT_AV_TAG, "Volume UP while paused -> Auto Play!");
+                    btAudio.isPaused = false;
+                }
+            } else if (param->psth_cmd.key_code == ESP_AVRC_PT_CMD_VOL_DOWN) {
+                ESP_LOGI(BT_AV_TAG, "-> Volume DOWN Button Pressed on Speaker!");
                 btAudio.resetTimerPending = true;
             }
         }
@@ -281,10 +317,11 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
 
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param) {
     if (event == ESP_AVRC_CT_CONNECTION_STATE_EVT) {
-        Serial.printf("[BTAudio] AVRC CT conn_state evt: state %d\n", param->conn_stat.connected);
+        ESP_LOGI(BT_AV_TAG, "AVRC CT conn_state evt: state %d", param->conn_stat.connected);
     } else if (event == ESP_AVRC_CT_CHANGE_NOTIFY_EVT) {
         if (param->change_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
-            Serial.println("[BTAudio] AVRCP CT Volume Change Notification received!");
+            s_current_volume = param->change_ntf.event_parameter.volume;
+            ESP_LOGI(BT_AV_TAG, "AVRCP CT Lautstärke-Änderung: %d/127 (%.0f%%)", s_current_volume, (s_current_volume * 100.0f) / 127.0f);
             btAudio.resetTimerPending = true;
         }
     }
@@ -355,7 +392,7 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
                     break;
                 }
             }
-            if (!updated) {
+            if (!updated && s_foundDevices.size() < 10) {
                 ScannedDevice dev;
                 dev.name = name;
                 dev.lastSeen = millis();
@@ -394,6 +431,38 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
             Serial.println("[BTAudio] Discovery started.");
             s_is_discovering = true;
         }
+        break;
+    }
+    case ESP_BT_GAP_READ_RSSI_DELTA_EVT: {
+        s_current_rssi_delta = param->read_rssi_delta.rssi_delta;
+        ESP_LOGI(BT_AV_TAG, "RSSI Delta zum Lautsprecher: %d dB", s_current_rssi_delta);
+        break;
+    }
+    case ESP_BT_GAP_CFM_REQ_EVT: {
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT: auto-confirming pairing with [%02x:%02x:%02x:%02x:%02x:%02x]",
+                 param->cfm_req.bda[0], param->cfm_req.bda[1], param->cfm_req.bda[2],
+                 param->cfm_req.bda[3], param->cfm_req.bda[4], param->cfm_req.bda[5]);
+        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
+        break;
+    }
+    case ESP_BT_GAP_KEY_NOTIF_EVT:
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %u", (unsigned int)param->key_notif.passkey);
+        break;
+    case ESP_BT_GAP_KEY_REQ_EVT:
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_REQ_EVT");
+        break;
+    case ESP_BT_GAP_AUTH_CMPL_EVT: {
+        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGI(BT_AV_TAG, "Pairing / Authentication SUCCESS: %s", param->auth_cmpl.device_name);
+        } else {
+            ESP_LOGW(BT_AV_TAG, "Pairing / Authentication FAILED, status: %d", param->auth_cmpl.stat);
+        }
+        break;
+    }
+    case ESP_BT_GAP_PIN_REQ_EVT: {
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_PIN_REQ_EVT: Replying with pin 0000");
+        esp_bt_pin_code_t pin_code = {'0', '0', '0', '0'};
+        esp_bt_gap_pin_reply(param->pin_req.bda, true, 4, pin_code);
         break;
     }
     default:
@@ -565,18 +634,31 @@ void BTAudio::disconnect() {
 
 void BTAudio::reconnect() {
     static uint32_t lastConnectAttempt = 0;
-    if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED || s_is_connecting) return;
+    if (s_a2d_conn_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED || s_is_connecting || s_is_discovering) return;
     
-    // Defer the very first connection attempt after boot by 3 seconds to avoid collisions
-    // with the speaker's own auto-reconnect attempt!
-    if (lastConnectAttempt == 0 && millis() < 3000) return;
+    // Fast start on boot: 300ms to let BT baseband stabilize, then connect immediately!
+    if (lastConnectAttempt == 0 && millis() < 300) return;
     
-    if (millis() - lastConnectAttempt < 5000) return; // Rate-limit reconnection attempts to 5s
+    // Wait at least 3 seconds AFTER the last disconnect before retrying
+    if (s_last_disconnect_time > 0 && millis() - s_last_disconnect_time < 3000) return;
+
+    // Gentle backoff when speaker is off to preserve memory and prevent Bluedroid timer crashes
+    uint32_t retryInterval = 5000;
+    if (s_consecutive_fails > 10) {
+        retryInterval = 15000; // 15s if speaker is off for a while
+    } else if (s_consecutive_fails > 3) {
+        retryInterval = 8000;  // 8s after 3 failed attempts
+    }
+
+    if (millis() - lastConnectAttempt < retryInterval) return;
     lastConnectAttempt = millis();
 
     if (s_has_peer_bda) {
+        s_consecutive_fails++;
         s_is_connecting = true;
-        Serial.println("[BTAudio] Reconnecting to saved peer address...");
+        ESP_LOGI(BT_AV_TAG, "Reconnecting to saved peer address [%02x:%02x:%02x:%02x:%02x:%02x] (Attempt %d, Free Heap: %u)...",
+                 s_peer_bda[0], s_peer_bda[1], s_peer_bda[2], s_peer_bda[3], s_peer_bda[4], s_peer_bda[5],
+                 s_consecutive_fails, (unsigned int)ESP.getFreeHeap());
         esp_a2d_source_connect(s_peer_bda);
     } else {
         startScan();
@@ -592,58 +674,60 @@ bool BTAudio::isDisconnected() {
 }
 
 bool BTAudio::isAnnouncementPlaying() {
-    bool decoding = (mp3 && mp3->isRunning());
-    bool rbHasData = (outBuf && outBuf->rb && (xRingbufferGetCurFreeSize(outBuf->rb) < 8192));
-    return decoding || rbHasData;
+    return (mp3 != nullptr && mp3->isRunning());
 }
 
 void BTAudio::playAnnouncement(const char* filepath) {
     if (!isConnected()) {
-        Serial.println("[BTAudio] Skipping announcement playback (Bluetooth not connected).");
+        ESP_LOGW(BT_AV_TAG, "Skipping announcement %s (Bluetooth not connected).", filepath);
         return;
     }
 
     if (!SPIFFS.exists(filepath)) {
-        Serial.printf("[BTAudio] Error: Announcement file %s not found in SPIFFS!\n", filepath);
+        ESP_LOGE(BT_AV_TAG, "Announcement file %s not found in SPIFFS!", filepath);
         return;
     }
     
+    File f = SPIFFS.open(filepath, "r");
+    size_t fsize = f ? f.size() : 0;
+    if (f) f.close();
+    ESP_LOGI(BT_AV_TAG, "Starting announcement: %s (Size: %u bytes)", filepath, (unsigned int)fsize);
+
     if (mp3 && mp3->isRunning()) {
         mp3->stop();
     }
     if (mp3) { delete mp3; mp3 = nullptr; }
     if (fileSource) { delete fileSource; fileSource = nullptr; }
 
+    if (outBuf && outBuf->rb) {
+        size_t dummy_bytes;
+        while (uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &dummy_bytes, 0, 8192)) {
+            vRingbufferReturnItem(outBuf->rb, item);
+        }
+    }
+
     fileSource = new AudioFileSourceSPIFFS(filepath);
-    mp3 = new AudioGeneratorMP3(s_madBuff, sizeof(s_madBuff),
-                                s_madStreamBuf, sizeof(s_madStreamBuf),
-                                s_madFrameBuf, sizeof(s_madFrameBuf),
-                                s_madSynthBuf, sizeof(s_madSynthBuf));
+    mp3 = new AudioGeneratorMP3(s_mp3PreAlloc, sizeof(s_mp3PreAlloc));
     
     if (outBuf) {
-        if (outBuf->rb) {
-            size_t dummy_bytes;
-            while (uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &dummy_bytes, 0, 8192)) {
-                vRingbufferReturnItem(outBuf->rb, item);
-            }
-        }
         outBuf->SetGain(2.5f);
         bool ok = mp3->begin(fileSource, outBuf);
         if (!ok) {
-            Serial.printf("[BTAudio] Error: mp3->begin() failed for %s!\n", filepath);
+            ESP_LOGE(BT_AV_TAG, "mp3->begin() failed for %s!", filepath);
             delete mp3; mp3 = nullptr;
             delete fileSource; fileSource = nullptr;
             return;
         }
         
-        Serial.printf("[BTAudio] Playing announcement: %s (Started OK)\n", filepath);
+        ESP_LOGI(BT_AV_TAG, "Announcement started successfully: %s", filepath);
         
         // Pre-fill ringbuffer with initial MP3 audio frames
-        do {
+        int prefillCount = 0;
+        while (mp3 && mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 2048 && prefillCount++ < 15) {
             if (!mp3->loop()) {
                 break;
             }
-        } while (mp3 && mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024);
+        }
     }
 }
 
@@ -651,7 +735,7 @@ void BTAudio::loop() {
     if (resetTimerPending) {
         resetTimerPending = false;
         if (getFadeFactor() < 1.0f || timerExpired) {
-            Serial.println("[BTAudio] Lautstärke am Lautsprecher verändert während Ausblendung -> Sleep Timer neu gestartet!");
+            ESP_LOGI(BT_AV_TAG, "Volume changed during fade-out -> Sleep timer restarted!");
             timerExpired = false;
             resetTimer();
         }
@@ -667,39 +751,57 @@ void BTAudio::loop() {
     }
 
     if (mp3 && mp3->isRunning()) {
-        for (int k = 0; k < 3; k++) {
-            if (outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) <= 1024) {
-                break;
-            }
+        // Feed MP3 decoder while there is free space in the ringbuffer
+        int loops = 0;
+        while (mp3->isRunning() && outBuf && outBuf->rb && xRingbufferGetCurFreeSize(outBuf->rb) > 1024 && loops++ < 20) {
             if (!mp3->loop()) {
+                ESP_LOGI(BT_AV_TAG, "MP3 Announcement decode finished.");
                 mp3->stop();
-                portENTER_CRITICAL(&audioMux);
                 delete mp3; mp3 = nullptr;
                 delete fileSource; fileSource = nullptr;
-                portEXIT_CRITICAL(&audioMux);
                 break;
             }
         }
     } else if (mp3 && !mp3->isRunning()) {
-        portENTER_CRITICAL(&audioMux);
         delete mp3; mp3 = nullptr;
         delete fileSource; fileSource = nullptr;
-        portEXIT_CRITICAL(&audioMux);
     }
     
     if (s_pending_a2dp_connect_time > 0 && millis() >= s_pending_a2dp_connect_time) {
         s_pending_a2dp_connect_time = 0;
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
             s_is_connecting = true;
-            Serial.println("[BTAudio] AVRCP link settled. Initiating A2DP audio connection now...");
+            ESP_LOGI(BT_AV_TAG, "AVRCP link settled. Initiating A2DP audio connection now...");
             esp_a2d_source_connect(s_peer_bda);
         }
     }
-    
-    if (mediaReadyPending && (millis() - connectedTime > 1500)) {
-        mediaReadyPending = false;
-        Serial.println("[BTAudio] Deferred Media ready check...");
-        esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
+
+    // Regelmäßige Status- und Pegelausgabe alle 10 Sekunden
+    static uint32_t lastStatusPrint = 0;
+    if (millis() - lastStatusPrint >= 10000) {
+        lastStatusPrint = millis();
+        if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+            esp_bt_gap_read_rssi_delta(s_peer_bda);
+            
+            const char* timerStr = "Endlos";
+            char timerBuf[32];
+            if (timerState != TIMER_ENDLESS) {
+                uint32_t dur = (timerState == TIMER_30_MIN) ? 30 * 60 : 60 * 60;
+                uint32_t elapsed = (millis() - timerStartTime) / 1000;
+                uint32_t rem = (dur > elapsed) ? (dur - elapsed) : 0;
+                snprintf(timerBuf, sizeof(timerBuf), "%um %02us rest", (unsigned int)(rem / 60), (unsigned int)(rem % 60));
+                timerStr = timerBuf;
+            }
+            
+            ESP_LOGI(BT_AV_TAG, "[Status] 🔊 %s | Pegel: %d%% (%d/127) | RSSI-Delta: %d dB | %s | Timer: %s | Heap: %u KB",
+                     isPaused ? "PAUSE" : "PLAYING",
+                     (int)((s_current_volume * 100) / 127),
+                     s_current_volume,
+                     s_current_rssi_delta,
+                     noiseGen.getTypeName(noiseGen.getType()),
+                     timerStr,
+                     (unsigned int)(ESP.getFreeHeap() / 1024));
+        }
     }
 }
 
@@ -710,12 +812,13 @@ void BTAudio::nextNoiseTrack() {
     storage.saveLastNoiseType(t);
     
     isPaused = false; // Automatically resume play when track changes
-    Serial.printf("[BTAudio] Rauschen gewechselt auf Typ: %d\n", t);
+    ESP_LOGI(BT_AV_TAG, "Rauschen gewechselt auf Typ: %d (%s)", t, noiseGen.getTypeName(t));
     
     String filename = String("/") + String(t) + ".mp3";
     if (SPIFFS.exists(filename.c_str())) {
         playAnnouncement(filename.c_str());
     } else {
+        ESP_LOGW(BT_AV_TAG, "Announcement file %s not found -> playing beep fallback", filename.c_str());
         triggerWarningBeep();
     }
 }
@@ -725,32 +828,40 @@ void BTAudio::toggleTimer() {
     TimerState nextState;
     if (timerState == TIMER_30_MIN) {
         nextState = TIMER_60_MIN;
-        Serial.println("[BTAudio] Timer umgeschaltet auf: 60 Minuten");
+        ESP_LOGI(BT_AV_TAG, "Timer umgeschaltet auf: 60 Minuten");
         if (SPIFFS.exists("/timer_60.mp3")) {
             playAnnouncement("/timer_60.mp3");
         } else {
+            ESP_LOGW(BT_AV_TAG, "Announcement /timer_60.mp3 not found -> playing beep fallback");
             triggerWarningBeep();
         }
     } else if (timerState == TIMER_60_MIN) {
         nextState = TIMER_ENDLESS;
-        Serial.println("[BTAudio] Timer umgeschaltet auf: Endlos");
+        ESP_LOGI(BT_AV_TAG, "Timer umgeschaltet auf: Endlos");
         if (SPIFFS.exists("/timer_endless.mp3")) {
             playAnnouncement("/timer_endless.mp3");
         } else {
+            ESP_LOGW(BT_AV_TAG, "Announcement /timer_endless.mp3 not found -> playing beep fallback");
             triggerWarningBeep();
         }
     } else {
         nextState = TIMER_30_MIN;
-        Serial.println("[BTAudio] Timer umgeschaltet auf: 30 Minuten");
+        ESP_LOGI(BT_AV_TAG, "Timer umgeschaltet auf: 30 Minuten");
         if (SPIFFS.exists("/timer_30.mp3")) {
             playAnnouncement("/timer_30.mp3");
         } else {
+            ESP_LOGW(BT_AV_TAG, "Announcement /timer_30.mp3 not found -> playing beep fallback");
             triggerWarningBeep();
         }
     }
     timerState = nextState;
     resetTimer();
 }
+
+bool BTAudio::isStreaming() {
+    return (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED);
+}
+
 
 void BTAudio::resetTimer() {
     timerStartTime = millis();
