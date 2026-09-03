@@ -324,11 +324,22 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param) {
     if (event == ESP_AVRC_CT_CONNECTION_STATE_EVT) {
         ESP_LOGI(BT_AV_TAG, "AVRC CT conn_state evt: state %d", param->conn_stat.connected);
+        if (param->conn_stat.connected) {
+            // Register for volume changes from the speaker so we can log them and react
+            esp_avrc_ct_send_register_notification_cmd(1, ESP_AVRC_RN_VOLUME_CHANGE, 0);
+        }
     } else if (event == ESP_AVRC_CT_CHANGE_NOTIFY_EVT) {
         if (param->change_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
             s_current_volume = param->change_ntf.event_parameter.volume;
-            ESP_LOGI(BT_AV_TAG, "AVRCP CT Lautstaerke-Aenderung: %d/127 (%.0f%%)", s_current_volume, (s_current_volume * 100.0f) / 127.0f);
+            ESP_LOGI(BT_AV_TAG, "AVRCP CT Lautstaerke-Aenderung am Speaker: %d/127 (%.0f%%)", s_current_volume, (s_current_volume * 100.0f) / 127.0f);
             btAudio.resetTimerPending = true;
+            
+            if (btAudio.isPaused) {
+                ESP_LOGI(BT_AV_TAG, "Lautstaerke am Speaker erhoeht -> Auto Play!");
+                btAudio.isPaused = false;
+            }
+            // Re-register to keep receiving future volume updates
+            esp_avrc_ct_send_register_notification_cmd(1, ESP_AVRC_RN_VOLUME_CHANGE, 0);
         }
     }
 }
