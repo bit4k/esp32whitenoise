@@ -261,7 +261,7 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         } else if (param->reg_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
             ESP_LOGI(BT_AV_TAG, "AVRCP RN_VOLUME_CHANGE registered");
             esp_avrc_rn_param_t rn_param;
-            rn_param.volume = 127;
+            rn_param.volume = s_current_volume;
             esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_VOLUME_CHANGE, ESP_AVRC_RN_RSP_INTERIM, &rn_param);
         }
         break;
@@ -325,8 +325,9 @@ static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t
     if (event == ESP_AVRC_CT_CONNECTION_STATE_EVT) {
         ESP_LOGI(BT_AV_TAG, "AVRC CT conn_state evt: state %d", param->conn_stat.connected);
         if (param->conn_stat.connected) {
-            // Register for volume changes from the speaker so we can log them and react
-            esp_avrc_ct_send_register_notification_cmd(1, ESP_AVRC_RN_VOLUME_CHANGE, 0);
+            // Sony SRS-XB10 requires an initial Absolute Volume command to unmute the audio path.
+            // We set it to s_current_volume (default ~78%) instead of 100% to avoid deafening noise.
+            esp_avrc_ct_send_set_absolute_volume_cmd(1, s_current_volume);
         }
     } else if (event == ESP_AVRC_CT_CHANGE_NOTIFY_EVT) {
         if (param->change_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
@@ -338,8 +339,6 @@ static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t
                 ESP_LOGI(BT_AV_TAG, "Lautstaerke am Speaker erhoeht -> Auto Play!");
                 btAudio.isPaused = false;
             }
-            // Re-register to keep receiving future volume updates
-            esp_avrc_ct_send_register_notification_cmd(1, ESP_AVRC_RN_VOLUME_CHANGE, 0);
         }
     }
 }
