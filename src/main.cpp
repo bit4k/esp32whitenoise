@@ -220,6 +220,14 @@ void loop() {
         if (isConn != wasConnected) {
             if (isConn) {
                 Serial.println("\n>>> BLUETOOTH-LAUTSPRECHER VERBUNDEN! <<<\n");
+                // IMMER 30-Minuten-Timer beim Verbinden starten (egal was vorher war):
+                btAudio.setTimerState(TIMER_30_MIN);
+                btAudio.resetTimer();
+                btAudio.setFadeFactor(1.0f);
+                btAudio.isPaused = false;
+                timerExpired = false;
+                expireTime = 0;
+                reconnectPending = false;
             } else {
                 Serial.println("\n>>> BLUETOOTH-LAUTSPRECHER GETRENNT! <<<\n");
             }
@@ -264,8 +272,8 @@ void loop() {
             // Check if 5 minutes have passed since expire
             if (millis() - expireTime > 5 * 60 * 1000) {
                 if (btAudio.isConnected()) {
+                    Serial.println("\n[Timer] 5 Minuten Stille vorbei -> Trenne Bluetooth, damit Lautsprecher abschalten kann.\n");
                     btAudio.disconnect();
-                    Serial.println("Timer expired, 5 mins passed -> Disconnected BT to allow speaker to power off.");
                     reconnectPending = true;
                     disconnectTime = millis();
                 }
@@ -277,13 +285,12 @@ void loop() {
         btAudio.setFadeFactor(1.0f);
     }
     
-    // If we disconnected due to sleep timer, wait 30 minutes before allowing reconnections.
-    // This gives the speaker enough time to execute its own auto-power-off (usually 10-15 mins).
-    if (reconnectPending && (millis() - disconnectTime > 30 * 60 * 1000)) {
+    // If we disconnected due to sleep timer, wait 15 minutes (speaker auto-off time)
+    // before resuming active paging. However, the ESP32 remains connectable,
+    // so if the user turns on the speaker, it reconnects instantly!
+    if (reconnectPending && (millis() - disconnectTime > 15 * 60 * 1000)) {
         reconnectPending = false;
-        timerExpired = false; // MUST reset this so it doesn't immediately disconnect again!
-        btAudio.resetTimer(); // Reset the timer so it plays music when it reconnects
-        Serial.println("30 minutes passed since disconnect. Allowing reconnections for the next session.");
+        Serial.println("15 minutes passed since disconnect. Resuming background paging.");
     }
 
     // Background Reconnection Loop

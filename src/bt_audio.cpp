@@ -24,6 +24,7 @@ static bool s_pending_connect = false;
 
 // Audio processing
 extern bool timerExpired;
+extern bool reconnectPending;
 class AudioOutputRingBuf : public AudioOutput {
 public:
     RingbufHandle_t rb;
@@ -55,6 +56,7 @@ static AudioOutputRingBuf *outBuf = nullptr;
 static std::vector<ScannedDevice> s_foundDevices;
 static std::vector<String> s_targetDevices;
 static bool s_is_connecting = false;
+static uint32_t s_connecting_start_time = 0;
 static uint32_t s_pending_a2dp_connect_time = 0;
 static uint32_t s_last_disconnect_time = 0;
 static bool s_media_ctrl_in_flight = false;
@@ -174,11 +176,15 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
             btAudio.isPaused = false; // Default PLAY on connect
             btAudio.connectedTime = millis();
             
+            // ALWAYS start fresh 30-minute sleep timer on every connection!
+            btAudio.setTimerState(TIMER_30_MIN);
+            btAudio.resetTimer();
+            btAudio.setFadeFactor(1.0f);
+            timerExpired = false;
+            reconnectPending = false;
+            
             // Critical for Coexistence: Disable BT discoverability while streaming.
             esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
-            
-            // Ensure volume is at 100% and not muted
-            btAudio.setFadeFactor(1.0f);
             
             // Fast Start: Check if media source channel is ready
             ESP_LOGD(BT_AV_TAG, "Triggering media ready check on connect...");
@@ -474,7 +480,7 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 // BTAudio Class
 // -------------------------------------------------------------
 BTAudio::BTAudio() {
-    timerState = TIMER_ENDLESS;
+    timerState = TIMER_30_MIN; // Default: 30 minutes sleep timer
     timerStartTime = 0;
     lastPauseTime = 0;
 }
@@ -639,23 +645,17 @@ void BTAudio::reconnect() {
     // Fast start on boot: 300ms to let BT baseband stabilize, then connect immediately!
     if (lastConnectAttempt == 0 && millis() < 300) return;
     
-    // Wait at least 3 seconds AFTER the last disconnect before retrying
-    if (s_last_disconnect_time > 0 && millis() - s_last_disconnect_time < 3000) return;
+    // Wait at least 2.5 seconds AFTER the last disconnect before retrying to let stack settle
+    if (s_last_disconnect_time > 0 && millis() - s_last_disconnect_time < 2500) return;
 
-    // Gentle backoff when speaker is off to preserve memory and prevent Bluedroid timer crashes
-    uint32_t retryInterval = 5000;
-    if (s_consecutive_fails > 10) {
-        retryInterval = 15000; // 15s if speaker is off for a while
-    } else if (s_consecutive_fails > 3) {
-        retryInterval = 8000;  // 8s after 3 failed attempts
-    }
-
-    if (millis() - lastConnectAttempt < retryInterval) return;
+    // Retry consistently every 4 seconds for instant reconnection as soon as speaker turns on
+    if (millis() - lastConnectAttempt < 4000) return;
     lastConnectAttempt = millis();
 
     if (s_has_peer_bda) {
         s_consecutive_fails++;
         s_is_connecting = true;
+        s_connecting_start_time = millis();
         ESP_LOGI(BT_AV_TAG, "Reconnecting to saved peer address [%02x:%02x:%02x:%02x:%02x:%02x] (Attempt %d, Free Heap: %u)...",
                  s_peer_bda[0], s_peer_bda[1], s_peer_bda[2], s_peer_bda[3], s_peer_bda[4], s_peer_bda[5],
                  s_consecutive_fails, (unsigned int)ESP.getFreeHeap());
@@ -767,10 +767,17 @@ void BTAudio::loop() {
         delete fileSource; fileSource = nullptr;
     }
     
+    // Watchdog to prevent s_is_connecting from hanging indefinitely
+    if (s_is_connecting && (millis() - s_connecting_start_time > 7000)) {
+        ESP_LOGW(BT_AV_TAG, "Connection attempt timed out. Unlocking s_is_connecting.");
+        s_is_connecting = false;
+    }
+
     if (s_pending_a2dp_connect_time > 0 && millis() >= s_pending_a2dp_connect_time) {
         s_pending_a2dp_connect_time = 0;
         if (s_a2d_conn_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !s_is_connecting) {
             s_is_connecting = true;
+            s_connecting_start_time = millis();
             ESP_LOGI(BT_AV_TAG, "AVRCP link settled. Initiating A2DP audio connection now...");
             esp_a2d_source_connect(s_peer_bda);
         }
@@ -877,4 +884,5 @@ bool BTAudio::isStreaming() {
 void BTAudio::resetTimer() {
     timerStartTime = millis();
     setFadeFactor(1.0f);
+    timerExpired = false;
 }
