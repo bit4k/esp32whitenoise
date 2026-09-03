@@ -45,9 +45,12 @@ const char* NoiseGenerator::getTypeName(int typeIndex) {
 // 64-bit XorShift* PRNG: Period is 2^64 - 1 (~1.84 x 10^19 samples)
 // At 44.1 kHz, this will not repeat for over 13 million years!
 // Eliminates the 65,536-sample (1.48s / ~2Hz) cyclical repetition of the old LCG generator.
-static uint64_t s_rng_state = 0x853c49e6748fea9bULL;
+static uint64_t s_rng_state = 0;
 
 static inline uint32_t xorshift64star() {
+    if (s_rng_state == 0) {
+        s_rng_state = 0x853c49e6748fea9bULL; // Fallback seed
+    }
     s_rng_state ^= s_rng_state >> 12;
     s_rng_state ^= s_rng_state << 25;
     s_rng_state ^= s_rng_state >> 27;
@@ -55,7 +58,7 @@ static inline uint32_t xorshift64star() {
 }
 
 int16_t NoiseGenerator::generateWhite() {
-    // Use upper 16 bits of 64-bit XorShift* for maximum entropy and zero low-bit correlation
+    // Cast to int16_t maps 0..32767 to positive, 32768..65535 to negative
     return (int16_t)(xorshift64star() >> 16);
 }
 
