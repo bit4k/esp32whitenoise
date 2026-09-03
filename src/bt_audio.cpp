@@ -209,7 +209,7 @@ static void bt_app_av_sm_hdlr(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
     case ESP_A2D_AUDIO_STATE_EVT: {
         s_a2d_audio_state = param->audio_stat.state;
         if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STARTED) {
-            ESP_LOGI(BT_AV_TAG, "🔊 A2DP Audio Streaming Started (White Noise Playing)");
+            ESP_LOGI(BT_AV_TAG, "A2DP Audio Streaming Started (White Noise Playing)");
         } else if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_STOPPED) {
             ESP_LOGD(BT_AV_TAG, "A2DP Audio Streaming Stopped");
         } else if (s_a2d_audio_state == ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND) {
@@ -270,12 +270,12 @@ static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t
         static uint8_t last_vol = 0;
         uint8_t current_vol = param->set_abs_vol.volume;
         s_current_volume = current_vol;
-        ESP_LOGI(BT_AV_TAG, "AVRCP TG Lautstärke: %d/127 (%.0f%%)", current_vol, (current_vol * 100.0f) / 127.0f);
+        ESP_LOGI(BT_AV_TAG, "AVRCP TG Lautstaerke: %d/127 (%.0f%%)", current_vol, (current_vol * 100.0f) / 127.0f);
         btAudio.resetTimerPending = true;
         
         // Auto-Play if volume is increased while paused
         if (btAudio.isPaused && current_vol > last_vol) {
-            ESP_LOGI(BT_AV_TAG, "Lautstärke erhöht -> Auto Play!");
+            ESP_LOGI(BT_AV_TAG, "Lautstaerke erhoeht -> Auto Play!");
             btAudio.isPaused = false;
         }
         last_vol = current_vol;
@@ -327,7 +327,7 @@ static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t
     } else if (event == ESP_AVRC_CT_CHANGE_NOTIFY_EVT) {
         if (param->change_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
             s_current_volume = param->change_ntf.event_parameter.volume;
-            ESP_LOGI(BT_AV_TAG, "AVRCP CT Lautstärke-Änderung: %d/127 (%.0f%%)", s_current_volume, (s_current_volume * 100.0f) / 127.0f);
+            ESP_LOGI(BT_AV_TAG, "AVRCP CT Lautstaerke-Aenderung: %d/127 (%.0f%%)", s_current_volume, (s_current_volume * 100.0f) / 127.0f);
             btAudio.resetTimerPending = true;
         }
     }
@@ -806,7 +806,7 @@ void BTAudio::loop() {
                 timerStr = timerBuf;
             }
             
-            ESP_LOGI(BT_AV_TAG, "[Status] ⏱️ Uptime: %02u:%02u:%02u | 🔊 %s | Pegel: %d%% (%d/127) | RSSI-Delta: %d dB | %s | Timer: %s | Heap: %u KB",
+            ESP_LOGI(BT_AV_TAG, "[Status] Uptime: %02u:%02u:%02u | %s | Pegel: %d%% (%d/127) | RSSI-Delta: %d dB | %s | Timer: %s | Heap: %u KB",
                      (unsigned int)upH, (unsigned int)upM, (unsigned int)upS,
                      isPaused ? "PAUSE" : "PLAYING",
                      (int)((s_current_volume * 100) / 127),
@@ -816,7 +816,7 @@ void BTAudio::loop() {
                      timerStr,
                      (unsigned int)(ESP.getFreeHeap() / 1024));
         } else {
-            ESP_LOGI(BT_AV_TAG, "[Status] ⏱️ Uptime: %02u:%02u:%02u | ⚪ GETRENNT (Warte auf Lautsprecher...) | Heap: %u KB",
+            ESP_LOGI(BT_AV_TAG, "[Status] Uptime: %02u:%02u:%02u | GETRENNT (Warte auf Lautsprecher...) | Heap: %u KB",
                      (unsigned int)upH, (unsigned int)upM, (unsigned int)upS,
                      (unsigned int)(ESP.getFreeHeap() / 1024));
         }

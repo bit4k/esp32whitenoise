@@ -265,7 +265,7 @@ void loop() {
         if (!timerExpired && elapsed >= duration) {
             timerExpired = true;
             expireTime = millis();
-            Serial.println("\n[Timer] Sleep Timer abgelaufen (Lautstärke auf 0). Trenne BT in 5 Minuten.\n");
+            Serial.println("\n[Timer] Sleep Timer abgelaufen (Lautstaerke auf 0). Trenne BT in 5 Minuten.\n");
         }
         
         if (timerExpired) {
