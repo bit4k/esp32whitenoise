@@ -103,11 +103,11 @@ static int32_t bt_app_a2d_data_cb(uint8_t *data, int32_t len) {
         size_t bytes_received = 0;
         uint8_t *rb_data = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &bytes_received, 0, len);
         if (rb_data && bytes_received > 0) {
-            // Amplify MP3 samples by 3 to make the beep/voice louder and cut through the noise
+            // Amplify MP3 samples by 2 to make the beep/voice louder and cut through the noise
             int16_t *mp3_samples = (int16_t *)rb_data;
             int32_t num_samples = bytes_received / 2;
             for (int32_t i = 0; i < num_samples; i++) {
-                int32_t amplified = (int32_t)mp3_samples[i] * 3;
+                int32_t amplified = (int32_t)mp3_samples[i] * 2;
                 if (amplified > 32767) amplified = 32767;
                 if (amplified < -32768) amplified = -32768;
                 mp3_samples[i] = (int16_t)amplified;
