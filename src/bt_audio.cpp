@@ -103,6 +103,16 @@ static int32_t bt_app_a2d_data_cb(uint8_t *data, int32_t len) {
         size_t bytes_received = 0;
         uint8_t *rb_data = (uint8_t *)xRingbufferReceiveUpTo(outBuf->rb, &bytes_received, 0, len);
         if (rb_data && bytes_received > 0) {
+            // Amplify MP3 samples by 3 to make the beep/voice louder and cut through the noise
+            int16_t *mp3_samples = (int16_t *)rb_data;
+            int32_t num_samples = bytes_received / 2;
+            for (int32_t i = 0; i < num_samples; i++) {
+                int32_t amplified = (int32_t)mp3_samples[i] * 3;
+                if (amplified > 32767) amplified = 32767;
+                if (amplified < -32768) amplified = -32768;
+                mp3_samples[i] = (int16_t)amplified;
+            }
+            
             memcpy(data, rb_data, bytes_received);
             vRingbufferReturnItem(outBuf->rb, rb_data);
             if (bytes_received < (size_t)len) {
@@ -657,8 +667,13 @@ void BTAudio::reconnect() {
     // Wait at least 2.5 seconds AFTER the last disconnect before retrying to let stack settle
     if (s_last_disconnect_time > 0 && millis() - s_last_disconnect_time < 2500) return;
 
-    // Retry consistently every 4 seconds for instant reconnection as soon as speaker turns on
-    if (millis() - lastConnectAttempt < 4000) return;
+    // Retry consistently every 4 seconds for instant reconnection as soon as speaker turns on.
+    // If it fails repeatedly, progressively back off to prevent Bluetooth stack crashes.
+    uint32_t retryInterval = 4000;
+    if (s_consecutive_fails > 10) retryInterval = 15000; // 15 seconds after 10 failures
+    if (s_consecutive_fails > 30) retryInterval = 60000; // 60 seconds after 30 failures
+    
+    if (millis() - lastConnectAttempt < retryInterval) return;
     lastConnectAttempt = millis();
 
     if (s_has_peer_bda) {

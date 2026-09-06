@@ -228,6 +228,9 @@ void loop() {
                 timerExpired = false;
                 expireTime = 0;
                 reconnectPending = false;
+                
+                // Beep once to confirm connection and timer start
+                btAudio.triggerWarningBeep();
             } else {
                 Serial.println("\n>>> BLUETOOTH-LAUTSPRECHER GETRENNT! <<<\n");
             }
@@ -238,7 +241,7 @@ void loop() {
 
     if (btAudio.getTimerState() != TIMER_ENDLESS) {
         uint32_t duration = (btAudio.getTimerState() == TIMER_30_MIN) ? (30 * 60 * 1000) : (60 * 60 * 1000);
-        uint32_t fadeDuration = 2 * 60 * 1000; // 2 minutes (120,000 ms)
+        uint32_t fadeDuration = 5 * 60 * 1000; // 5 minutes (300,000 ms)
         uint32_t fadeStart = (duration > fadeDuration) ? (duration - fadeDuration) : 0;
         uint32_t elapsed = millis() - btAudio.getTimerStartTime();
         
@@ -249,10 +252,11 @@ void loop() {
             if (fadeFactor < 0.0f) fadeFactor = 0.0f;
             btAudio.setFadeFactor(fadeFactor);
             
+            // Trigger Beep exactly 5 minutes before end
             if (!warningBeepTriggered) {
                 warningBeepTriggered = true;
                 btAudio.triggerWarningBeep();
-                Serial.println("\n[Timer] 2 Minuten vor Ende: Piepton abgespielt & Sanftes Ausblenden gestartet.\n");
+                Serial.println("\n[Timer] 5 Minuten vor Ende: Piepton abgespielt & Sanftes Ausblenden gestartet.\n");
             }
         } else if (elapsed < fadeStart) {
             btAudio.setFadeFactor(1.0f);
@@ -285,13 +289,10 @@ void loop() {
         btAudio.setFadeFactor(1.0f);
     }
     
-    // If we disconnected due to sleep timer, wait 15 minutes (speaker auto-off time)
-    // before resuming active paging. However, the ESP32 remains connectable,
-    // so if the user turns on the speaker, it reconnects instantly!
-    if (reconnectPending && (millis() - disconnectTime > 15 * 60 * 1000)) {
-        reconnectPending = false;
-        Serial.println("15 minutes passed since disconnect. Resuming background paging.");
-    }
+    // If we disconnected due to sleep timer, we stay in reconnectPending indefinitely.
+    // The ESP32 remains discoverable, so when the user turns the speaker back on,
+    // the speaker will initiate the connection and wake the ESP32 back up.
+    // We intentionally DO NOT resume background paging to avoid crashing the BT stack over hours of idle time.
 
     // Background Reconnection Loop
     // If we are fully disconnected and not in the cool-down period, periodically attempt reconnection.
